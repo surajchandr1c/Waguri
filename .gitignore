@@ -1,0 +1,23 @@
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment configuration & sensitive secrets
+.env
+
+# SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+*.log
