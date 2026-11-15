@@ -3,8 +3,8 @@ import html
 import logging
 import re
 import time
-from telegram import ChatPermissions, Update, User
-from telegram.constants import ChatType, ParseMode
+from telegram import ChatPermissions, Message, Update, User
+from telegram.constants import ChatMemberStatus, ChatType, ParseMode
 from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -28,6 +28,33 @@ from database import (
 from handlers.admin_check import check_bot_permissions, is_sender_admin_or_owner
 
 logger = logging.getLogger("Waguri.AdminCommands")
+
+
+NO_SEND_PERMISSIONS = ChatPermissions(
+    can_send_messages=False,
+    can_send_audios=False,
+    can_send_documents=False,
+    can_send_photos=False,
+    can_send_videos=False,
+    can_send_video_notes=False,
+    can_send_voice_notes=False,
+    can_send_polls=False,
+    can_send_other_messages=False,
+    can_add_web_page_previews=False,
+)
+
+UNRESTRICTED_PERMISSIONS = ChatPermissions(
+    can_send_messages=True,
+    can_send_audios=True,
+    can_send_documents=True,
+    can_send_photos=True,
+    can_send_videos=True,
+    can_send_video_notes=True,
+    can_send_voice_notes=True,
+    can_send_polls=True,
+    can_send_other_messages=True,
+    can_add_web_page_previews=True,
+)
 
 
 def parse_duration(arg: str | None) -> tuple[int, str]:
@@ -96,8 +123,60 @@ async def verify_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
     return True
 
 
-async def antlink_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Enable, disable, or check anti-link protection status in the group."""
+def resolve_target_user(
+    message: Message,
+    args: list[str] | None = None,
+) -> tuple[int | None, str, User | None, str | None]:
+    """
+    Extract target user id, display name, User object (if reply), and secondary argument
+    from a replied message or command line arguments.
+    Returns (target_user_id, target_name, target_user, extra_arg).
+    """
+    args = args or []
+    if message.reply_to_message and message.reply_to_message.from_user:
+        u = message.reply_to_message.from_user
+        name = u.first_name or u.username or str(u.id)
+        extra = args[0] if args else None
+        return u.id, name, u, extra
+    elif args and args[0].isdigit():
+        uid = int(args[0])
+        name = f"User {uid}"
+        extra = args[1] if len(args) > 1 else None
+        return uid, name, None, extra
+    return None, "Unknown", None, None
+
+
+async def _check_target_punishable(
+    chat_id: int, target_user_id: int, bot, action_verb: str, message: Message
+) -> bool:
+    """Check if target user is Waguri or an administrator/owner and thus exempt from penalties."""
+    if target_user_id == bot.id:
+        await message.reply_text(f"⛔ You cannot {action_verb} Waguri.")
+        return False
+
+    try:
+        target_member = await bot.get_chat_member(chat_id=chat_id, user_id=target_user_id)
+        if target_member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
+            await message.reply_text(f"⛔ You cannot {action_verb} a group administrator or owner.")
+            return False
+    except Exception:
+        pass
+
+    return True
+
+
+async def _toggle_group_setting(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    setting_key: str,
+    feature_title: str,
+    setter_func,
+    cmd_name: str,
+    on_desc: str | None = None,
+    off_desc: str | None = None,
+    icon: str = "🛡️",
+) -> None:
+    """Consolidated helper to toggle a binary group moderation setting on or off."""
     if not await verify_admin(update, context):
         return
 
@@ -106,146 +185,71 @@ async def antlink_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     args = context.args
 
     settings = get_group_settings(chat.id)
-    current_status = settings.get("anti_link_enabled", True)
+    current_status = settings.get(setting_key, True)
+
+    on_label = on_desc or f"Enable {feature_title.lower()} protection"
+    off_label = off_desc or f"Disable {feature_title.lower()} protection"
 
     if not args:
         status_text = "ENABLED" if current_status else "DISABLED"
+        display_name = f"{feature_title} Protection" if "Protection" not in feature_title and "Messages" not in feature_title else feature_title
         await message.reply_text(
-            f"🛡️ Anti-Link Protection is currently: **{status_text}** in this group.\n\n"
+            f"{icon} {display_name} is currently: **{status_text}** in this group.\n\n"
             "To change setting:\n"
-            "• `/antlink on` - Enable anti-link protection\n"
-            "• `/antlink off` - Disable anti-link protection",
+            f"• `/{cmd_name} on` - {on_label}\n"
+            f"• `/{cmd_name} off` - {off_label}",
             parse_mode="Markdown",
         )
         return
 
     action = args[0].lower()
+    display_suffix = " protection" if "Protection" not in feature_title and "Messages" not in feature_title else ""
     if action in ("on", "enable", "true", "1"):
-        set_group_anti_link(chat.id, True)
-        log_moderation_event(chat.id, update.effective_user.id, "CONFIG_CHANGE", "Anti-Link ENABLED")
-        await message.reply_text("✅ Anti-Link protection has been **ENABLED** for this group.", parse_mode="Markdown")
-        logger.info("[CONFIG] Anti-Link ENABLED in group '%s' (ID: %s)", chat.title, chat.id)
+        setter_func(chat.id, True)
+        log_moderation_event(chat.id, update.effective_user.id, "CONFIG_CHANGE", f"{feature_title} ENABLED")
+        await message.reply_text(f"✅ {feature_title}{display_suffix} has been **ENABLED** for this group.", parse_mode="Markdown")
+        logger.info("[CONFIG] %s ENABLED in group '%s' (ID: %s)", feature_title, chat.title, chat.id)
     elif action in ("off", "disable", "false", "0"):
-        set_group_anti_link(chat.id, False)
-        log_moderation_event(chat.id, update.effective_user.id, "CONFIG_CHANGE", "Anti-Link DISABLED")
-        await message.reply_text("❌ Anti-Link protection has been **DISABLED** for this group.", parse_mode="Markdown")
-        logger.info("[CONFIG] Anti-Link DISABLED in group '%s' (ID: %s)", chat.title, chat.id)
+        setter_func(chat.id, False)
+        log_moderation_event(chat.id, update.effective_user.id, "CONFIG_CHANGE", f"{feature_title} DISABLED")
+        await message.reply_text(f"❌ {feature_title}{display_suffix} has been **DISABLED** for this group.", parse_mode="Markdown")
+        logger.info("[CONFIG] %s DISABLED in group '%s' (ID: %s)", feature_title, chat.title, chat.id)
     else:
-        await message.reply_text("ℹ️ Invalid option. Use `/antlink on` or `/antlink off`.", parse_mode="Markdown")
+        await message.reply_text(f"ℹ️ Invalid option. Use `/{cmd_name} on` or `/{cmd_name} off`.", parse_mode="Markdown")
+
+
+async def antlink_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Enable, disable, or check anti-link protection status in the group."""
+    await _toggle_group_setting(
+        update, context, "anti_link_enabled", "Anti-Link", set_group_anti_link, "antlink",
+        on_desc="Enable anti-link protection", off_desc="Disable anti-link protection", icon="🛡️",
+    )
 
 
 async def antibiolink_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Enable, disable, or check anti-bio-link protection status in the group."""
-    if not await verify_admin(update, context):
-        return
-
-    message = update.effective_message
-    chat = update.effective_chat
-    args = context.args
-
-    settings = get_group_settings(chat.id)
-    current_status = settings.get("anti_bio_link_enabled", True)
-
-    if not args:
-        status_text = "ENABLED" if current_status else "DISABLED"
-        await message.reply_text(
-            f"🛡️ Anti-Bio-Link Protection is currently: **{status_text}** in this group.\n\n"
-            "To change setting:\n"
-            "• `/antibiolink on` - Enable anti-bio-link protection\n"
-            "• `/antibiolink off` - Disable anti-bio-link protection",
-            parse_mode="Markdown",
-        )
-        return
-
-    action = args[0].lower()
-    if action in ("on", "enable", "true", "1"):
-        set_group_anti_bio_link(chat.id, True)
-        log_moderation_event(chat.id, update.effective_user.id, "CONFIG_CHANGE", "Anti-Bio-Link ENABLED")
-        await message.reply_text("✅ Anti-Bio-Link protection has been **ENABLED** for this group.", parse_mode="Markdown")
-        logger.info("[CONFIG] Anti-Bio-Link ENABLED in group '%s' (ID: %s)", chat.title, chat.id)
-    elif action in ("off", "disable", "false", "0"):
-        set_group_anti_bio_link(chat.id, False)
-        log_moderation_event(chat.id, update.effective_user.id, "CONFIG_CHANGE", "Anti-Bio-Link DISABLED")
-        await message.reply_text("❌ Anti-Bio-Link protection has been **DISABLED** for this group.", parse_mode="Markdown")
-        logger.info("[CONFIG] Anti-Bio-Link DISABLED in group '%s' (ID: %s)", chat.title, chat.id)
-    else:
-        await message.reply_text("ℹ️ Invalid option. Use `/antibiolink on` or `/antibiolink off`.", parse_mode="Markdown")
+    await _toggle_group_setting(
+        update, context, "anti_bio_link_enabled", "Anti-Bio-Link", set_group_anti_bio_link, "antibiolink",
+        on_desc="Enable anti-bio-link protection", off_desc="Disable anti-bio-link protection", icon="🛡️",
+    )
 
 
 async def cleanservice_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Enable, disable, or check clean service messages status in the group."""
-    if not await verify_admin(update, context):
-        return
-
-    message = update.effective_message
-    chat = update.effective_chat
-    args = context.args
-
-    settings = get_group_settings(chat.id)
-    current_status = settings.get("clean_service_enabled", True)
-
-    if not args:
-        status_text = "ENABLED" if current_status else "DISABLED"
-        await message.reply_text(
-            f"🧹 Clean Service Messages is currently: **{status_text}** in this group.\n\n"
-            "To change setting:\n"
-            "• `/cleanservice on` - Enable automatic removal of service messages (joins, leaves, pins)\n"
-            "• `/cleanservice off` - Disable automatic removal of service messages",
-            parse_mode="Markdown",
-        )
-        return
-
-    action = args[0].lower()
-    if action in ("on", "enable", "true", "1"):
-        set_group_clean_service(chat.id, True)
-        log_moderation_event(chat.id, update.effective_user.id, "CONFIG_CHANGE", "Clean Service Messages ENABLED")
-        await message.reply_text("✅ Clean Service Messages has been **ENABLED** for this group.", parse_mode="Markdown")
-        logger.info("[CONFIG] Clean Service Messages ENABLED in group '%s' (ID: %s)", chat.title, chat.id)
-    elif action in ("off", "disable", "false", "0"):
-        set_group_clean_service(chat.id, False)
-        log_moderation_event(chat.id, update.effective_user.id, "CONFIG_CHANGE", "Clean Service Messages DISABLED")
-        await message.reply_text("❌ Clean Service Messages has been **DISABLED** for this group.", parse_mode="Markdown")
-        logger.info("[CONFIG] Clean Service Messages DISABLED in group '%s' (ID: %s)", chat.title, chat.id)
-    else:
-        await message.reply_text("ℹ️ Invalid option. Use `/cleanservice on` or `/cleanservice off`.", parse_mode="Markdown")
+    await _toggle_group_setting(
+        update, context, "clean_service_enabled", "Clean Service Messages", set_group_clean_service, "cleanservice",
+        on_desc="Enable automatic removal of service messages (joins, leaves, pins)",
+        off_desc="Disable automatic removal of service messages",
+        icon="🧹",
+    )
 
 
 async def antispam_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Enable, disable, or check anti-spam protection status in the group."""
-    if not await verify_admin(update, context):
-        return
-
-    message = update.effective_message
-    chat = update.effective_chat
-    args = context.args
-
-    settings = get_group_settings(chat.id)
-    current_status = settings.get("anti_spam_enabled", True)
-
-    if not args:
-        status_text = "ENABLED" if current_status else "DISABLED"
-        await message.reply_text(
-            f"🛡️ Anti-Spam Protection is currently: **{status_text}** in this group.\n\n"
-            "To change setting:\n"
-            "• `/antispam on` - Enable anti-spam protection\n"
-            "• `/antispam off` - Disable anti-spam protection",
-            parse_mode="Markdown",
-        )
-        return
-
-    action = args[0].lower()
-    if action in ("on", "enable", "true", "1"):
-        set_group_anti_spam(chat.id, True)
-        log_moderation_event(chat.id, update.effective_user.id, "CONFIG_CHANGE", "Anti-Spam ENABLED")
-        await message.reply_text("✅ Anti-Spam protection has been **ENABLED** for this group.", parse_mode="Markdown")
-        logger.info("[CONFIG] Anti-Spam ENABLED in group '%s' (ID: %s)", chat.title, chat.id)
-    elif action in ("off", "disable", "false", "0"):
-        set_group_anti_spam(chat.id, False)
-        log_moderation_event(chat.id, update.effective_user.id, "CONFIG_CHANGE", "Anti-Spam DISABLED")
-        await message.reply_text("❌ Anti-Spam protection has been **DISABLED** for this group.", parse_mode="Markdown")
-        logger.info("[CONFIG] Anti-Spam DISABLED in group '%s' (ID: %s)", chat.title, chat.id)
-    else:
-        await message.reply_text("ℹ️ Invalid option. Use `/antispam on` or `/antispam off`.", parse_mode="Markdown")
+    await _toggle_group_setting(
+        update, context, "anti_spam_enabled", "Anti-Spam", set_group_anti_spam, "antispam",
+        on_desc="Enable anti-spam protection", off_desc="Disable anti-spam protection", icon="🛡️",
+    )
 
 
 async def warnings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -255,17 +259,7 @@ async def warnings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     message = update.effective_message
     chat = update.effective_chat
-
-    target_user_id: int | None = None
-    target_name: str = "Unknown"
-
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user = message.reply_to_message.from_user
-        target_user_id = target_user.id
-        target_name = target_user.first_name or target_user.username or str(target_user_id)
-    elif context.args and context.args[0].isdigit():
-        target_user_id = int(context.args[0])
-        target_name = f"User ID {target_user_id}"
+    target_user_id, target_name, _, _ = resolve_target_user(message, context.args)
 
     if not target_user_id:
         await message.reply_text(
@@ -309,17 +303,7 @@ async def resetwarnings_command(update: Update, context: ContextTypes.DEFAULT_TY
 
     message = update.effective_message
     chat = update.effective_chat
-
-    target_user_id: int | None = None
-    target_name: str = "Unknown"
-
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user = message.reply_to_message.from_user
-        target_user_id = target_user.id
-        target_name = target_user.first_name or target_user.username or str(target_user_id)
-    elif context.args and context.args[0].isdigit():
-        target_user_id = int(context.args[0])
-        target_name = f"User ID {target_user_id}"
+    target_user_id, target_name, _, _ = resolve_target_user(message, context.args)
 
     if not target_user_id:
         await message.reply_text(
@@ -330,7 +314,7 @@ async def resetwarnings_command(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-    cleared = reset_user_warnings(chat.id, target_user_id)
+    reset_user_warnings(chat.id, target_user_id)
     clear_active_incident(chat.id, target_user_id)
     log_moderation_event(chat.id, update.effective_user.id, "RESET_WARNINGS", f"User: {target_user_id}")
 
@@ -347,22 +331,7 @@ async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     message = update.effective_message
     chat = update.effective_chat
-
-    target_user_id: int | None = None
-    target_name: str = "Unknown"
-    duration_arg: str | None = None
-
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user = message.reply_to_message.from_user
-        target_user_id = target_user.id
-        target_name = target_user.first_name or target_user.username or str(target_user_id)
-        if context.args:
-            duration_arg = context.args[0]
-    elif context.args and context.args[0].isdigit():
-        target_user_id = int(context.args[0])
-        target_name = f"User {target_user_id}"
-        if len(context.args) > 1:
-            duration_arg = context.args[1]
+    target_user_id, target_name, target_user, duration_arg = resolve_target_user(message, context.args)
 
     if not target_user_id:
         await message.reply_text(
@@ -373,21 +342,9 @@ async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    # Never allow muting the bot itself or administrators
-    if target_user_id == context.bot.id:
-        await message.reply_text("⛔ You cannot mute Waguri.")
+    if not await _check_target_punishable(chat.id, target_user_id, context.bot, "mute", message):
         return
 
-    # Check if target is administrator or owner
-    try:
-        target_member = await context.bot.get_chat_member(chat_id=chat.id, user_id=target_user_id)
-        if target_member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
-            await message.reply_text("⛔ You cannot mute a group administrator or owner.")
-            return
-    except Exception:
-        pass
-
-    # Check bot permissions
     _, can_restrict = await check_bot_permissions(chat, context.bot, need_delete=False, need_restrict=True)
     if not can_restrict:
         await message.reply_text(
@@ -399,31 +356,18 @@ async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     duration_seconds, duration_label = parse_duration(duration_arg)
     until_date = int(time.time()) + duration_seconds
 
-    no_send_permissions = ChatPermissions(
-        can_send_messages=False,
-        can_send_audios=False,
-        can_send_documents=False,
-        can_send_photos=False,
-        can_send_videos=False,
-        can_send_video_notes=False,
-        can_send_voice_notes=False,
-        can_send_polls=False,
-        can_send_other_messages=False,
-        can_add_web_page_previews=False,
-    )
-
     try:
         await context.bot.restrict_chat_member(
             chat_id=chat.id,
             user_id=target_user_id,
-            permissions=no_send_permissions,
+            permissions=NO_SEND_PERMISSIONS,
             until_date=until_date,
         )
 
         record_restriction(
             chat_id=chat.id,
             user_id=target_user_id,
-            username=getattr(target_user, "username", None) if "target_user" in locals() else None,
+            username=getattr(target_user, "username", None) if target_user else None,
             reason=f"Manual mute by admin ({duration_label})",
             restricted_at=time.time(),
             expires_at=time.time() + duration_seconds,
@@ -455,17 +399,7 @@ async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     message = update.effective_message
     chat = update.effective_chat
-
-    target_user_id: int | None = None
-    target_name: str = "Unknown"
-
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user = message.reply_to_message.from_user
-        target_user_id = target_user.id
-        target_name = target_user.first_name or target_user.username or str(target_user_id)
-    elif context.args and context.args[0].isdigit():
-        target_user_id = int(context.args[0])
-        target_name = f"User {target_user_id}"
+    target_user_id, target_name, _, _ = resolve_target_user(message, context.args)
 
     if not target_user_id:
         await message.reply_text(
@@ -476,7 +410,6 @@ async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    # Check bot permissions
     _, can_restrict = await check_bot_permissions(chat, context.bot, need_delete=False, need_restrict=True)
     if not can_restrict:
         await message.reply_text(
@@ -485,24 +418,11 @@ async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    unrestricted_permissions = ChatPermissions(
-        can_send_messages=True,
-        can_send_audios=True,
-        can_send_documents=True,
-        can_send_photos=True,
-        can_send_videos=True,
-        can_send_video_notes=True,
-        can_send_voice_notes=True,
-        can_send_polls=True,
-        can_send_other_messages=True,
-        can_add_web_page_previews=True,
-    )
-
     try:
         await context.bot.restrict_chat_member(
             chat_id=chat.id,
             user_id=target_user_id,
-            permissions=unrestricted_permissions,
+            permissions=UNRESTRICTED_PERMISSIONS,
         )
 
         lift_active_restrictions(chat.id, target_user_id)
@@ -531,17 +451,7 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     message = update.effective_message
     chat = update.effective_chat
-
-    target_user_id: int | None = None
-    target_name: str = "Unknown"
-
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user = message.reply_to_message.from_user
-        target_user_id = target_user.id
-        target_name = target_user.first_name or target_user.username or str(target_user_id)
-    elif context.args and context.args[0].isdigit():
-        target_user_id = int(context.args[0])
-        target_name = f"User {target_user_id}"
+    target_user_id, target_name, target_user, _ = resolve_target_user(message, context.args)
 
     if not target_user_id:
         await message.reply_text(
@@ -552,18 +462,8 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         return
 
-    if target_user_id == context.bot.id:
-        await message.reply_text("⛔ You cannot ban Waguri.")
+    if not await _check_target_punishable(chat.id, target_user_id, context.bot, "ban", message):
         return
-
-    # Check if target is administrator or owner
-    try:
-        target_member = await context.bot.get_chat_member(chat_id=chat.id, user_id=target_user_id)
-        if target_member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
-            await message.reply_text("⛔ You cannot ban a group administrator or owner.")
-            return
-    except Exception:
-        pass
 
     _, can_restrict = await check_bot_permissions(chat, context.bot, need_delete=False, need_restrict=True)
     if not can_restrict:
@@ -575,7 +475,7 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         record_restriction(
             chat_id=chat.id,
             user_id=target_user_id,
-            username=getattr(target_user, "username", None) if "target_user" in locals() else None,
+            username=getattr(target_user, "username", None) if target_user else None,
             reason="Manual ban by admin",
             restricted_at=time.time(),
             expires_at=0,
@@ -596,13 +496,7 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     message = update.effective_message
     chat = update.effective_chat
-
-    target_user_id: int | None = None
-
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user_id = message.reply_to_message.from_user.id
-    elif context.args and context.args[0].isdigit():
-        target_user_id = int(context.args[0])
+    target_user_id, _, _, _ = resolve_target_user(message, context.args)
 
     if not target_user_id:
         await message.reply_text("Usage: <code>/unban &lt;user_id&gt;</code>", parse_mode=ParseMode.HTML)
@@ -613,6 +507,8 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         lift_active_restrictions(chat.id, target_user_id)
         log_moderation_event(chat.id, update.effective_user.id, "UNBAN", f"User: {target_user_id}")
         await message.reply_text(f"✅ User ID <code>{target_user_id}</code> has been unbanned.", parse_mode=ParseMode.HTML)
+    except (Forbidden, BadRequest) as exc:
+        await message.reply_text(f"⚠️ Telegram API Error: {exc}")
     except (Forbidden, BadRequest) as exc:
         await message.reply_text(f"⚠️ Telegram API Error: {exc}")
 

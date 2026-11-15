@@ -32,6 +32,8 @@ from database import (
     save_active_incident,
 )
 from handlers.admin_check import check_bot_permissions, is_sender_admin_or_owner
+from handlers.admin_commands import NO_SEND_PERMISSIONS
+from handlers.anti_link import schedule_warning_cleanup
 
 logger = logging.getLogger("Waguri.AntiSpam")
 
@@ -69,24 +71,6 @@ def compute_message_fingerprint(text: str | None) -> str:
         return ""
     normalized = " ".join(text.strip().split()).lower()
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
-async def schedule_warning_cleanup(warning_message: Message, delay_seconds: int = WARNING_DELETE_AFTER_SECONDS) -> None:
-    """Asynchronously delete a temporary warning message after delay_seconds."""
-    try:
-        await asyncio.sleep(delay_seconds)
-        await warning_message.delete()
-        logger.debug(
-            "[CLEANUP] Deleted temporary warning message ID %s in chat %s",
-            warning_message.message_id,
-            warning_message.chat_id,
-        )
-    except Exception as exc:
-        logger.debug(
-            "[CLEANUP] Could not delete warning message ID %s: %s",
-            warning_message.message_id,
-            exc,
-        )
 
 
 def check_flood_rate(
@@ -145,28 +129,11 @@ async def delete_spam_messages_batch(chat_id: int, message_ids: list[int], bot: 
 async def restrict_user_24h(chat: Chat, user: User, bot: Application.bot, duration_seconds: int = 86400) -> bool:
     """Restrict a member from sending messages for the specified duration (default 24h)."""
     until_date = int(time.time()) + duration_seconds
-    no_send_permissions = ChatPermissions(
-        can_send_messages=False,
-        can_send_audios=False,
-        can_send_documents=False,
-        can_send_photos=False,
-        can_send_videos=False,
-        can_send_video_notes=False,
-        can_send_voice_notes=False,
-        can_send_polls=False,
-        can_send_other_messages=False,
-        can_add_web_page_previews=False,
-        can_change_info=False,
-        can_invite_users=False,
-        can_pin_messages=False,
-        can_manage_topics=False,
-    )
-
     try:
         await bot.restrict_chat_member(
             chat_id=chat.id,
             user_id=user.id,
-            permissions=no_send_permissions,
+            permissions=NO_SEND_PERMISSIONS,
             until_date=until_date,
         )
         return True

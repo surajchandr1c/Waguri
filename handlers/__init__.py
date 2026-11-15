@@ -91,7 +91,6 @@ from handlers.bot_owner import (
     register_bot_owner_handlers,
 )
 from handlers.help_menu import (
-    build_command_options_markup,
     build_main_help_markup,
     help_callback_handler,
     interactive_help_command,
@@ -99,6 +98,26 @@ from handlers.help_menu import (
 )
 from handlers.command_menu import setup_command_menu
 from handlers.error_handler import error_handler
+from handlers.personal_autoreply import (
+    autoreply_off_command,
+    autoreply_on_command,
+    build_personal_settings_markup,
+    business_stats_command,
+    exclude_user_command,
+    handle_business_connection,
+    handle_business_message,
+    handle_deleted_business_messages,
+    handle_edited_business_message,
+    handle_private_reply_message_input,
+    include_user_command,
+    mystatus_command,
+    personal_callback_handler,
+    personal_command,
+    preview_command,
+    register_personal_autoreply_handlers,
+    resetmessage_command,
+    setmessage_command,
+)
 
 
 def register_all_handlers(application: Application) -> None:
@@ -142,6 +161,9 @@ def register_all_handlers(application: Application) -> None:
 
     # Group 4: User Greetings ("hii", "hlw", "hello")
     register_greeting_handlers(application)
+
+    # Telegram Business & Personal Auto-Reply Handlers
+    register_personal_autoreply_handlers(application)
 
     # Global Error Handler
     application.add_error_handler(error_handler)

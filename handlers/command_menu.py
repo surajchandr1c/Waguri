@@ -13,6 +13,16 @@ logger = logging.getLogger("Waguri.CommandMenu")
 DEFAULT_COMMANDS: list[BotCommand] = [
     BotCommand("start", "Start Waguri"),
     BotCommand("help", "View this help menu"),
+    BotCommand("personal", "Configure personal auto-reply"),
+    BotCommand("autoreply_on", "Enable personal auto-reply"),
+    BotCommand("autoreply_off", "Disable personal auto-reply"),
+    BotCommand("setmessage", "Set custom auto-reply message"),
+    BotCommand("preview", "Preview auto-reply message"),
+    BotCommand("mystatus", "Check auto-reply & connection status"),
+    BotCommand("resetmessage", "Reset auto-reply message to default"),
+    BotCommand("exclude_user", "Exclude user from auto-replies"),
+    BotCommand("include_user", "Re-allow user to receive auto-replies"),
+    BotCommand("business_stats", "View auto-reply delivery statistics"),
     BotCommand("about", "About Waguri"),
     BotCommand("contact", "Contact support (@lucky_paji)"),
 ]

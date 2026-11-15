@@ -24,7 +24,11 @@ from database import (
     remove_blacklisted_pattern,
     remove_whitelisted_domain,
 )
-from handlers.admin_check import check_bot_permissions, is_sender_admin_or_owner
+from handlers.admin_check import (
+    check_bot_permissions,
+    is_sender_admin_or_owner,
+    verify_group_or_channel_admin,
+)
 
 logger = logging.getLogger("Waguri.AntiLink")
 
@@ -101,6 +105,80 @@ async def schedule_warning_cleanup(warning_message: Message, delay_seconds: int 
         await warning_message.delete()
     except Exception as exc:
         logger.debug("[WARNING CLEANUP] Could not delete warning message: %s", exc)
+
+
+async def dispatch_bio_link_violation(
+    chat: Chat,
+    sender: User,
+    bio_url: str,
+    context: ContextTypes.DEFAULT_TYPE,
+    settings: dict,
+    on_join: bool = False,
+) -> bool:
+    """
+    Handle warning issuance or 24h restriction when a bio link is detected.
+    Returns True if user was restricted, False otherwise.
+    """
+    user_name = html.escape(sender.first_name or sender.username or str(sender.id))
+    cleanup_delay = settings.get("warning_delete_after_seconds", 10)
+    chat_title = chat.title or "Unnamed Group"
+
+    warnings_count = get_user_warnings_count(chat.id, sender.id)
+    warning_limit = settings.get("warning_limit", 2)
+    if settings.get("auto_restrict_enabled", True) and warnings_count >= warning_limit:
+        _, can_restrict = await check_bot_permissions(chat, context.bot, need_delete=False, need_restrict=True)
+        if can_restrict:
+            from handlers.anti_spam import restrict_user_24h
+            restr_duration = settings.get("restriction_duration_seconds", 86400)
+            await restrict_user_24h(chat, sender, context.bot, duration_seconds=restr_duration)
+            increment_stat(chat.id, "restrictions_applied", count=1, chat_title=chat_title)
+            reason_suffix = " on join" if on_join else ""
+            record_restriction(
+                chat.id,
+                sender.id,
+                sender.username,
+                f"Bio link warning limit reached{reason_suffix}",
+                time.time(),
+                time.time() + restr_duration,
+            )
+            log_moderation_event(
+                chat.id,
+                sender.id,
+                "USER_RESTRICTED",
+                f"Restricted{' on join' if on_join else ''} for {restr_duration}s due to repeated bio link violations",
+            )
+            restr_text = (
+                f"🚫 <b>User Restricted:</b> <a href=\"tg://user?id={sender.id}\">{user_name}</a> "
+                f"has been restricted from sending messages for {restr_duration // 3600} hours "
+                "due to repeated bio link violations."
+            )
+            try:
+                r_msg = await context.bot.send_message(
+                    chat_id=chat.id,
+                    text=restr_text,
+                    parse_mode=ParseMode.HTML,
+                )
+                asyncio.create_task(schedule_warning_cleanup(r_msg, delay_seconds=cleanup_delay))
+            except Exception:
+                pass
+            return True
+
+    removal_notice = "" if on_join else "Your message has been removed. "
+    warn_text = (
+        f"⚠️ <b>Bio Link Warning:</b> <a href=\"tg://user?id={sender.id}\">{user_name}</a>, "
+        f"links in your profile bio (<code>{html.escape(bio_url)}</code>) are not allowed in this group. "
+        f"{removal_notice}Please remove the link from your bio."
+    )
+    try:
+        warn_msg = await context.bot.send_message(
+            chat_id=chat.id,
+            text=warn_text,
+            parse_mode=ParseMode.HTML,
+        )
+        asyncio.create_task(schedule_warning_cleanup(warn_msg, delay_seconds=cleanup_delay))
+    except Exception as warn_exc:
+        logger.error("[BIO LINK WARN ERROR] Failed to send warning in chat %s: %s", chat.id, warn_exc)
+    return False
 
 
 def extract_all_links(message: Message | None) -> list[str]:
@@ -360,73 +438,8 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                                 bio_url,
                                 message.message_id,
                             )
-                            user_name = html.escape(sender.first_name or sender.username or str(sender.id))
-                            cleanup_delay = settings.get("warning_delete_after_seconds", 10)
-
-                            # Check if user reached warning limit for auto-restriction
-                            warnings_count = get_user_warnings_count(chat.id, sender.id)
-                            warning_limit = settings.get("warning_limit", 2)
-                            if settings.get("auto_restrict_enabled", True) and warnings_count >= warning_limit:
-                                _, can_restrict = await check_bot_permissions(
-                                    chat, context.bot, need_delete=False, need_restrict=True
-                                )
-                                if can_restrict:
-                                    from handlers.anti_spam import restrict_user_24h
-                                    restr_duration = settings.get("restriction_duration_seconds", 86400)
-                                    await restrict_user_24h(chat, sender, context.bot, duration_seconds=restr_duration)
-                                    increment_stat(chat.id, "restrictions_applied", count=1, chat_title=chat.title)
-                                    record_restriction(
-                                        chat.id,
-                                        sender.id,
-                                        sender.username,
-                                        "Bio link warning limit reached",
-                                        time.time(),
-                                        time.time() + restr_duration,
-                                    )
-                                    log_moderation_event(
-                                        chat.id,
-                                        sender.id,
-                                        "USER_RESTRICTED",
-                                        f"Restricted for {restr_duration}s due to repeated bio link violations",
-                                    )
-                                    restr_text = (
-                                        f"🚫 <b>User Restricted:</b> <a href=\"tg://user?id={sender.id}\">{user_name}</a> "
-                                        f"has been restricted from sending messages for {restr_duration // 3600} hours "
-                                        "due to repeated bio link violations."
-                                    )
-                                    try:
-                                        r_msg = await context.bot.send_message(
-                                            chat_id=chat.id,
-                                            text=restr_text,
-                                            parse_mode=ParseMode.HTML,
-                                        )
-                                        asyncio.create_task(
-                                            schedule_warning_cleanup(r_msg, delay_seconds=cleanup_delay)
-                                        )
-                                    except Exception:
-                                        pass
-                                    return
-
-                            warn_text = (
-                                f"⚠️ <b>Bio Link Warning:</b> <a href=\"tg://user?id={sender.id}\">{user_name}</a>, "
-                                f"links in your profile bio (<code>{html.escape(bio_url)}</code>) are not allowed in this group. "
-                                "Your message has been removed. Please remove the link from your bio."
-                            )
-                            try:
-                                warn_msg = await context.bot.send_message(
-                                    chat_id=chat.id,
-                                    text=warn_text,
-                                    parse_mode=ParseMode.HTML,
-                                )
-                                asyncio.create_task(
-                                    schedule_warning_cleanup(warn_msg, delay_seconds=cleanup_delay)
-                                )
-                            except Exception as warn_exc:
-                                logger.error(
-                                    "[BIO LINK WARN ERROR] Failed to send warning in chat %s: %s",
-                                    chat.id,
-                                    warn_exc,
-                                )
+                            await dispatch_bio_link_violation(chat, sender, bio_url, context, settings, on_join=False)
+                            return
                         except Exception as exc:
                             logger.error(
                                 "[BIO LINK ERROR] Failed to delete message %s in chat %s: %s",
@@ -528,22 +541,12 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manage the per-group link whitelist (/whitelist add <domain>, /whitelist remove <domain>, /whitelist list)."""
+    if not await verify_group_or_channel_admin(update, context.bot):
+        return
+
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
-
-    if not message or not chat:
-        return
-
-    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
-        await message.reply_text("This command can only be used in a group or channel.")
-        return
-
-    sender_chat = getattr(message, "sender_chat", None)
-    is_admin = await is_sender_admin_or_owner(chat, user, sender_chat, context.bot)
-    if not is_admin:
-        await message.reply_text("You need administrator privileges to use this command.")
-        return
 
     args = context.args or []
     if not args or args[0].lower() in ("list", "show"):
@@ -591,22 +594,12 @@ async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Manage the per-group content blacklist (/blacklist add <pattern>, /blacklist remove <pattern>, /blacklist list)."""
+    if not await verify_group_or_channel_admin(update, context.bot):
+        return
+
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
-
-    if not message or not chat:
-        return
-
-    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
-        await message.reply_text("This command can only be used in a group or channel.")
-        return
-
-    sender_chat = getattr(message, "sender_chat", None)
-    is_admin = await is_sender_admin_or_owner(chat, user, sender_chat, context.bot)
-    if not is_admin:
-        await message.reply_text("You need administrator privileges to use this command.")
-        return
 
     args = context.args or []
     if not args or args[0].lower() in ("list", "show"):

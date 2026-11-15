@@ -5,7 +5,7 @@ from telegram.constants import ChatType, ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from database import get_group_settings, get_group_stats, update_group_feature
-from handlers.admin_check import is_sender_admin_or_owner
+from handlers.admin_check import is_sender_admin_or_owner, verify_group_or_channel_admin
 
 logger = logging.getLogger("Waguri.FeatureCommands")
 
@@ -76,23 +76,11 @@ FEATURE_MAP = {
 
 async def features_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View status of all moderation features for the current group."""
+    if not await verify_group_or_channel_admin(update, context.bot):
+        return
+
     message = update.effective_message
     chat = update.effective_chat
-    user = update.effective_user
-
-    if not message or not chat:
-        return
-
-    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
-        await message.reply_text("This command can only be used in a group or channel.")
-        return
-
-    sender_chat = getattr(message, "sender_chat", None)
-    is_admin = await is_sender_admin_or_owner(chat, user, sender_chat, context.bot)
-    if not is_admin:
-        await message.reply_text("You need administrator privileges to use this command.")
-        return
-
     settings = get_group_settings(chat.id)
     chat_title = html.escape(chat.title or "Unnamed Chat")
 
@@ -131,42 +119,45 @@ async def features_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
-async def enable_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Enable a specific moderation feature for the current group."""
+async def _toggle_feature(update: Update, context: ContextTypes.DEFAULT_TYPE, enable: bool) -> None:
+    """Internal helper to toggle a specific moderation feature on or off."""
+    if not await verify_group_or_channel_admin(update, context.bot):
+        return
+
     message = update.effective_message
     chat = update.effective_chat
     user = update.effective_user
-
-    if not message or not chat:
-        return
-
-    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
-        await message.reply_text("This command can only be used in a group or channel.")
-        return
-
-    sender_chat = getattr(message, "sender_chat", None)
-    is_admin = await is_sender_admin_or_owner(chat, user, sender_chat, context.bot)
-    if not is_admin:
-        await message.reply_text("You need administrator privileges to use this command.")
-        return
+    action_verb = "enable" if enable else "disable"
+    action_label = "enabled" if enable else "disabled"
+    action_icon = "✅" if enable else "❌"
 
     if not context.args:
-        await message.reply_text(
-            "⚠️ <b>Please specify a feature to enable.</b>\n\n"
-            "<b>Usage:</b> <code>/enable &lt;feature&gt;</code>\n"
-            "<b>Available features:</b>\n"
-            "• <code>antilink</code> - Anti-link protection\n"
-            "• <code>antispam</code> - Anti-spam protection\n"
-            "• <code>flood</code> - Flood rate detection\n"
-            "• <code>warnings</code> - Warning system\n"
-            "• <code>autorestrict</code> - 24-hour auto-restriction\n"
-            "• <code>antiforward</code> - Anti-forward protection\n"
-            "• <code>antijoin</code> - Anti-join spam burst alert\n"
-            "• <code>antibot</code> - Anti-bot protection\n"
-            "• <code>media</code> - Prohibited media filter\n"
-            "• <code>raid</code> - Emergency raid lockdown mode",
-            parse_mode=ParseMode.HTML,
-        )
+        if enable:
+            usage_body = (
+                "⚠️ <b>Please specify a feature to enable.</b>\n\n"
+                "<b>Usage:</b> <code>/enable &lt;feature&gt;</code>\n"
+                "<b>Available features:</b>\n"
+                "• <code>antilink</code> - Anti-link protection\n"
+                "• <code>antispam</code> - Anti-spam protection\n"
+                "• <code>flood</code> - Flood rate detection\n"
+                "• <code>warnings</code> - Warning system\n"
+                "• <code>autorestrict</code> - 24-hour auto-restriction\n"
+                "• <code>antiforward</code> - Anti-forward protection\n"
+                "• <code>antijoin</code> - Anti-join spam burst alert\n"
+                "• <code>antibot</code> - Anti-bot protection\n"
+                "• <code>media</code> - Prohibited media filter\n"
+                "• <code>raid</code> - Emergency raid lockdown mode"
+            )
+        else:
+            usage_body = (
+                "⚠️ <b>Please specify a feature to disable.</b>\n\n"
+                "<b>Usage:</b> <code>/disable &lt;feature&gt;</code>\n"
+                "<b>Available features:</b>\n"
+                "• <code>antilink</code>, <code>antispam</code>, <code>flood</code>, "
+                "<code>warnings</code>, <code>autorestrict</code>, <code>antiforward</code>, "
+                "<code>antijoin</code>, <code>antibot</code>, <code>media</code>, <code>raid</code>."
+            )
+        await message.reply_text(usage_body, parse_mode=ParseMode.HTML)
         return
 
     feature_key = context.args[0].strip().lower()
@@ -182,87 +173,32 @@ async def enable_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     col_name, display_name = mapping
-    update_group_feature(chat.id, col_name, True)
-    logger.info("Admin %s enabled '%s' in chat %s (%s)", user.id if user else "chat", col_name, chat.id, chat.title)
+    update_group_feature(chat.id, col_name, enable)
+    logger.info("Admin %s %sd '%s' in chat %s (%s)", user.id if user else "chat", action_verb, col_name, chat.id, chat.title)
 
     await message.reply_text(
-        f"✅ <b>{display_name}</b> has been <b>enabled</b> for this group.",
+        f"{action_icon} <b>{display_name}</b> has been <b>{action_label}</b> for this group.",
         parse_mode=ParseMode.HTML,
     )
+
+
+async def enable_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Enable a specific moderation feature for the current group."""
+    await _toggle_feature(update, context, enable=True)
 
 
 async def disable_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Disable a specific moderation feature for the current group."""
-    message = update.effective_message
-    chat = update.effective_chat
-    user = update.effective_user
-
-    if not message or not chat:
-        return
-
-    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
-        await message.reply_text("This command can only be used in a group or channel.")
-        return
-
-    sender_chat = getattr(message, "sender_chat", None)
-    is_admin = await is_sender_admin_or_owner(chat, user, sender_chat, context.bot)
-    if not is_admin:
-        await message.reply_text("You need administrator privileges to use this command.")
-        return
-
-    if not context.args:
-        await message.reply_text(
-            "⚠️ <b>Please specify a feature to disable.</b>\n\n"
-            "<b>Usage:</b> <code>/disable &lt;feature&gt;</code>\n"
-            "<b>Available features:</b>\n"
-            "• <code>antilink</code>, <code>antispam</code>, <code>flood</code>, "
-            "<code>warnings</code>, <code>autorestrict</code>, <code>antiforward</code>, "
-            "<code>antijoin</code>, <code>antibot</code>, <code>media</code>, <code>raid</code>.",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    feature_key = context.args[0].strip().lower()
-    mapping = FEATURE_MAP.get(feature_key)
-    if not mapping:
-        await message.reply_text(
-            f"❌ Unknown feature '<code>{html.escape(feature_key)}</code>'.\n\n"
-            "Valid options: <code>antilink</code>, <code>antispam</code>, <code>flood</code>, "
-            "<code>warnings</code>, <code>autorestrict</code>, <code>antiforward</code>, "
-            "<code>antijoin</code>, <code>antibot</code>, <code>media</code>, <code>raid</code>.",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    col_name, display_name = mapping
-    update_group_feature(chat.id, col_name, False)
-    logger.info("Admin %s disabled '%s' in chat %s (%s)", user.id if user else "chat", col_name, chat.id, chat.title)
-
-    await message.reply_text(
-        f"❌ <b>{display_name}</b> has been <b>disabled</b> for this group.",
-        parse_mode=ParseMode.HTML,
-    )
+    await _toggle_feature(update, context, enable=False)
 
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Display isolated moderation statistics for the current group or channel."""
+    if not await verify_group_or_channel_admin(update, context.bot):
+        return
+
     message = update.effective_message
     chat = update.effective_chat
-    user = update.effective_user
-
-    if not message or not chat:
-        return
-
-    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
-        await message.reply_text("This command can only be used in a group or channel.")
-        return
-
-    sender_chat = getattr(message, "sender_chat", None)
-    is_admin = await is_sender_admin_or_owner(chat, user, sender_chat, context.bot)
-    if not is_admin:
-        await message.reply_text("You need administrator privileges to use this command.")
-        return
-
     stats = get_group_stats(chat.id)
     chat_title = html.escape(chat.title or stats.get("chat_title") or "Unnamed Chat")
 

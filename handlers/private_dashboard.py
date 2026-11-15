@@ -50,6 +50,9 @@ def build_private_start_markup(bot_username: str = "Ms_Waguri_bot") -> tuple[str
             InlineKeyboardButton("💬 Contact Support", callback_data="pvt:contact"),
             InlineKeyboardButton("⚡ Bot Features", callback_data="pvt:features"),
         ],
+        [
+            InlineKeyboardButton("💼 Personal Auto-Reply", callback_data="pvt:personal"),
+        ],
     ]
 
     return text, InlineKeyboardMarkup(keyboard)
@@ -70,6 +73,13 @@ async def handle_private_callback(update: Update, context: ContextTypes.DEFAULT_
     if action == "main":
         bot_user = await context.bot.get_me()
         text, markup = build_private_start_markup(bot_user.username or "Ms_Waguri_bot")
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer()
+        return
+
+    elif action == "personal":
+        from handlers.personal_autoreply import build_personal_settings_markup
+        text, markup = build_personal_settings_markup(user.id)
         await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
         await query.answer()
         return

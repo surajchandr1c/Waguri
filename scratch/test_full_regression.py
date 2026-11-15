@@ -137,12 +137,12 @@ class TestFullRegression(unittest.IsolatedAsyncioTestCase):
         upd.effective_message.reply_text.assert_awaited_once()
         args, kwargs = upd.effective_message.reply_text.call_args
         text = args[0]
-        markup = kwargs.get("reply_markup")
-        btn_texts = [btn.text for row in markup.inline_keyboard for btn in row] if markup else []
-        combined = text + " " + " ".join(btn_texts)
-        self.assertIn("/settings", combined)
-        self.assertIn("/features", combined)
-        self.assertIn("/stats", combined)
+        self.assertIn("/personal", text)
+        self.assertIn("/autoreply_on", text)
+        self.assertIn("/autoreply_off", text)
+        self.assertIn("/settings", text)
+        self.assertIn("General Commands:", text)
+        self.assertNotIn("reply_markup", kwargs)
 
     async def test_about_command(self):
         upd, ctx = self.create_mock_update(-1001, 101, "/about")

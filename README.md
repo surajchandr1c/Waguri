@@ -2,7 +2,9 @@
 
 A high-performance, enterprise-grade Telegram management and moderation platform named **Waguri** (`@Ms_Waguri_bot`) built with Python and `python-telegram-bot` in long polling mode.
 
-Waguri is architected as a **scalable, multi-tenant platform** for unlimited Telegram groups, supergroups, and channels, featuring complete tenant isolation by `chat_id`, role-based access control (RBAC), private owner dashboards, interactive inline settings panels, progressive anti-spam, whitelist-powered anti-link protection, flood control, media filters, anti-forward, anti-bot, emergency raid mode, and SQLite database persistence with 13 dedicated tables and zero-downtime migrations.
+Waguri is architected as a **scalable, multi-tenant platform** for unlimited Telegram groups, supergroups, and channels, featuring complete tenant isolation by `chat_id`, role-based access control (RBAC), private owner dashboards, interactive inline settings panels, progressive anti-spam, whitelist-powered anti-link protection, flood control, media filters, anti-forward, anti-bot, emergency raid mode, and SQLite database persistence with 18 dedicated tables and zero-downtime migrations.
+
+Additionally, Waguri includes a complete **Multi-User Personal Auto-Reply System using Telegram Business Secretary Mode**, enabling every user to connect their personal Telegram Business account, customize their auto-reply message, and automatically respond only to first-time incoming senders with guaranteed isolation and zero duplicate messages.
 
 ---
 
@@ -77,6 +79,56 @@ Select an option below to manage your chats or learn more:
   ```text
   Hi, welcome. I am Waguri. How can I help you
   ```
+
+---
+
+## Multi-User Personal Auto-Reply System (Telegram Business Secretary Mode)
+
+Waguri includes an official Telegram Business Secretary Mode integration. Every person using the bot can connect their personal Telegram account and establish automated, customized replies to clients and incoming contacts.
+
+### Key Capabilities:
+- **Complete Multi-User Isolation:** Each user has their own independent settings, custom message templates, first-contact history, and reply logs. User A's configuration never impacts User B.
+- **First-Time Sender Detection:** Sends an automatic reply **only** when an external contact messages the connected account for the very first time. Repeat messages from the same sender are suppressed.
+- **Two Users Receiving from Same Sender:** If Person C messages User A, Person C receives User A's custom message. If Person C also messages User B, Person C receives User B's custom message.
+- **Account Owner Suppression:** When the connected business account owner types a message to a client, Waguri does not reply to the owner.
+- **Bot Suppression:** Waguri ignores messages from other bots.
+- **Advanced Concurrency & Race-Condition Prevention:** Powered by a unique SQLite database constraint on `(business_user_id, sender_id)` ensuring that simultaneous messages never result in duplicate replies.
+- **Telegram Business Lifecycle Updates:** Handles `business_connection` updates (connected, disabled, revoked permissions), `business_message` updates, `edited_business_message`, and `deleted_business_messages`.
+- **Permission Checking:** Verifies connection status and `can_reply` rights before attempting to send messages.
+
+### User Dashboard & Commands:
+- `/personal` - Open interactive personal auto-reply dashboard with inline controls.
+- `/autoreply_on` - Enable personal auto-reply.
+- `/autoreply_off` - Disable personal auto-reply.
+- `/setmessage <text>` - Set a custom auto-reply message (or enter interactive typing mode in PM).
+- `/preview` - Preview the rendered reply message with sample data.
+- `/mystatus` - View connection health, permissions, auto-reply mode, and delivery statistics.
+- `/resetmessage` - Reset the auto-reply back to the standard default message.
+- `/exclude_user <id|@username>` - Exclude a user or chat from receiving auto-replies.
+- `/include_user <id|@username>` - Remove an exclusion.
+
+### Dynamic Message Variables:
+Templates support dynamic metadata placeholders:
+- `{first_name}` - Client's first name
+- `{last_name}` - Client's last name
+- `{full_name}` - Client's full name
+- `{username}` - Client's @username (or name)
+- `{time}` - Time of message (HH:MM UTC)
+- `{date}` - Date of message (YYYY-MM-DD)
+
+### Advanced Settings:
+- **First-Time Sender Only (Default ON):** Responds strictly once to each new client.
+- **Cooldown Mode:** When first-time-only is toggled off, applies a configurable cooldown (1h, 6h, 12h, 24h, 48h) between replies to the same sender.
+- **Per-User Daily Reply Limits:** Protects accounts by enforcing daily caps (25, 50, 100, 250, 500 replies/day).
+- **Reply Delay Configuration:** Configurable delay (0s to 15s) before dispatching auto-replies.
+- **Exclusion List:** Blacklist specific users or usernames from ever receiving auto-replies.
+
+### How to Connect (Telegram Business):
+1. Open **Telegram Settings** on your phone or desktop.
+2. Go to **Telegram Business** $\rightarrow$ **Chatbots** (or **Business Bots**).
+3. Search for and select `@Ms_Waguri_bot`.
+4. Ensure **"Reply to messages"** is granted.
+5. Tap **Save / Done**. Waguri will automatically detect the connection and send a welcome confirmation in private chat!
 
 ---
 
@@ -156,44 +208,87 @@ Moderation Controls:
 
 ---
 
-## Interactive Help & Command Launcher (`/help`)
+## Bot Commands & Help (`/help`)
 
-When `/help` is sent in any chat or accessed via `📖 Help & Commands` in the private dashboard, Waguri displays an **interactive, clickable command launcher**:
+When `/help` is sent in any chat or accessed via `📖 Help & Commands` in the private dashboard, Waguri displays the complete command menu and feature reference directly in the chat:
 
 ```text
 🤖 Waguri Bot Commands & Help
 
-Tap any command button below to execute it or view its sub-options:
+General Commands:
+• /start - Start Waguri
+• /help - View this help menu
+• /about - About Waguri
+• /contact - Contact support (@lucky_paji)
 
-• Direct Commands: Execute immediately and return information.
-• Options Commands (▾): Open sub-options to configure or toggle features.
+🛡️ Group Management Commands:
+• /settings - Interactive moderation configuration dashboard
+• /features - View status of all features in current group
+• /enable <feature> - Enable a moderation feature
+• /disable <feature> - Disable a moderation feature
+• /stats - View moderation statistics for this chat
+• /logs - Review recent moderation audit logs
+• /id - View chat and user IDs
 
-[ ℹ️ /about ]       [ 💬 /contact ]      [ 🆔 /id ]
-[ ⚙️ /settings ]    [ ⚡ /features ]     [ 📊 /stats ]      [ 📋 /logs ]
-[ 🔗 /antlink ▾ ]   [ 🛡️ /antispam ▾ ]   [ 🚨 /raid ▾ ]
-[ ✅ /enable ▾ ]    [ ❌ /disable ▾ ]
-[ 🌐 /whitelist ▾ ] [ 🚫 /blacklist ▾ ]
-[ 🔇 /mute ▾ ]      [ 🔊 /unmute ]       [ ⚠️ /warnings ]
-[ 🔨 /ban ]         [ 🔓 /unban ]        [ 🔄 /resetwarnings ]
-[ ❌ Close Help Menu ]
+⚡️ Moderation & Penalties:
+• /whitelist [add|remove|list] <domain> - Manage allowed domains
+• /blacklist [add|remove|list] <pattern> - Manage blocked patterns
+• /warnings [reply|id] - View member warnings
+• /resetwarnings [reply|id] - Clear user warnings
+• /mute [reply|id] [time] - Mute user (e.g. 10m, 2h, 1d)
+• /unmute [reply|id] - Restore member messaging permissions
+• /ban [reply|id] - Ban member from group
+• /unban [reply|id] - Unban member
+• /antlink [on|off] - Toggle anti-link protection
+• /antibiolink [on|off] - Toggle bio link protection
+• /cleanservice [on|off] - Clean service messages (joins, leaves, pins)
+• /antispam [on|off] - Toggle repeated-message spam detection
+
+💼 Personal Auto-Reply (Telegram Business):
+• /personal - Open personal auto-reply settings dashboard
+• /autoreply_on - Enable personal auto-reply
+• /autoreply_off - Disable personal auto-reply
+• /setmessage <text> - Set custom reply message
+• /preview - Preview your auto-reply message
+• /mystatus - View auto-reply and connection status
+• /resetmessage - Reset reply to default template
+• /exclude_user <id|@user> - Exclude user from auto-replies
+• /include_user <id|@user> - Re-allow excluded user
+• /business_stats - View secretary delivery & usage statistics
+
+✨ Supported Placeholders:
+• {first_name} - Sender's first name
+• {last_name} - Sender's last name
+• {full_name} - Sender's full name
+• {username} - Sender's @username
+• {time} - Time sent (HH:MM UTC)
+• {date} - Date sent (YYYY-MM-DD)
+
+⚡ Advanced Features:
+• First-Time Sender Only: Automatically replies only to first-time contacts
+• Cooldown Mode: Configurable interval between replies to repeat senders
+• Daily Limits: Configurable daily reply caps (25 to 500 replies/day)
+• Reply Delay: Configurable delay (0s to 15s) before sending
+• Exclusion List: Prevent specific users or @usernames from receiving replies
 ```
-
-### Direct Commands vs Options Commands
-1. **Direct Commands (`/about`, `/contact`, `/id`, `/settings`, `/features`, `/stats`, `/logs`, `/unmute`, `/warnings`, `/ban`, `/unban`, `/resetwarnings`):**
-   - Tapping immediately executes the command and renders the result with a `[⬅️ Back to Commands]` navigation button.
-   - Non-administrators clicking admin commands are rejected by server-side RBAC with an instant notification alert.
-2. **Commands with Options (`/antlink ▾`, `/antispam ▾`, `/raid ▾`, `/enable ▾`, `/disable ▾`, `/whitelist ▾`, `/blacklist ▾`, `/mute ▾`):**
-   - Tapping opens an interactive sub-options selection card displaying all available arguments/choices.
-   - Selecting any option executes that sub-command (e.g. `/antlink on`, `/enable flood`, `/whitelist list`, `/mute 1h`) and confirms with a `[⬅️ Back to Commands]` button.
-   - In private chats, clicking group-specific options provides a guided shortcut to the `👥 My Groups` dashboard.
 
 ---
 
 ## Command Reference
 
-### General User Commands (`BotCommandScopeDefault`)
+### General & Personal Secretary Commands (`BotCommandScopeDefault`)
 - `/start` – Open private dashboard (in private) or send group welcome (in groups).
 - `/help` – Interactive clickable command launcher and documentation.
+- `/personal` – Open interactive personal auto-reply dashboard.
+- `/autoreply_on` – Turn on personal auto-reply for connected account.
+- `/autoreply_off` – Turn off personal auto-reply.
+- `/setmessage <text>` – Set custom auto-reply template with sender placeholders.
+- `/preview` – Preview rendered auto-reply template.
+- `/mystatus` – Check business connection, auto-reply state, and daily delivery stats.
+- `/resetmessage` – Reset auto-reply text to default template.
+- `/exclude_user <id|@username>` – Blacklist user or @username from receiving auto-replies.
+- `/include_user <id|@username>` – Remove blacklist exclusion for a user.
+- `/business_stats` – View delivery metrics and global secretary stats.
 - `/about` – Information about Waguri's architecture.
 - `/contact` – Directs users to bot administrator `@lucky_paji`.
 
@@ -249,13 +344,14 @@ Waguri utilizes a 13-table SQLite database with Write-Ahead Logging (`WAL` mode)
 Waguri/
 │
 ├── config.py                 # Configuration, token validator & owner ID parser
-├── database.py               # 13-table SQLite multi-tenant schema & migrations
+├── database.py               # 18-table SQLite multi-tenant & personal auto-reply schema & migrations
 ├── bot.py                    # Main application runner & polling manager
 │
 ├── handlers/
 │   ├── __init__.py           # Pipeline registration across priority groups 0 to 4
+│   ├── personal_autoreply.py # Multi-user Telegram Business Auto-Reply (/personal, /autoreply_on, etc.)
 │   ├── registration.py       # Bot join/leave lifecycle tracking (ChatMemberHandler)
-│   ├── private_dashboard.py  # Private owner dashboard with 8 inline buttons
+│   ├── private_dashboard.py  # Private owner dashboard with 9 inline buttons
 │   ├── settings_panel.py     # Interactive /settings dashboard & callback router
 │   ├── feature_commands.py   # /features, /enable, /disable, /stats
 │   ├── admin_check.py        # RBAC verification, permission check & admin TTL cache
@@ -271,8 +367,11 @@ Waguri/
 │   └── error_handler.py      # Global exception logger
 │
 ├── scratch/
+│   ├── test_personal_autoreply.py   # Multi-user Telegram Business Auto-Reply test suite (15 tests)
 │   ├── test_platform_full.py        # Automated platform test suite (9 test cases)
 │   ├── test_multi_group_channel.py  # Multi-group & channel isolation tests (7 test cases)
+│   ├── test_anti_bio_link.py        # Anti-bio link & service message clean tests (10 test cases)
+│   ├── test_help_menu.py            # Help menu & command launcher tests (7 test cases)
 │   └── test_full_regression.py      # Regression tests (6 test cases)
 │
 ├── .env                      # Bot credentials & super-owner IDs (git-ignored)
@@ -304,13 +403,12 @@ Waguri/
 
 4. **Execute all test suites:**
    ```powershell
-   python scratch/test_platform_full.py
-   python scratch/test_multi_group_channel.py
-   python scratch/test_full_regression.py
+   python -m unittest discover -s scratch
    ```
 
 > [!IMPORTANT]
-> **Telegram BotFather Settings:**
+> **Telegram BotFather & Business Mode Settings:**
 > 1. Message [@BotFather](https://t.me/BotFather) on Telegram.
 > 2. Send `/setprivacy` $\rightarrow$ select `@Ms_Waguri_bot` $\rightarrow$ choose **Disable** (enables message monitoring in groups).
-> 3. Waguri must be granted **Delete Messages** and **Ban Users / Restrict Members** administrator permissions in groups.
+> 3. For Telegram Business: In Telegram Settings $\rightarrow$ Telegram Business $\rightarrow$ Chatbots, connect `@Ms_Waguri_bot` and enable "Reply to messages".
+> 4. Waguri must be granted **Delete Messages** and **Ban Users / Restrict Members** administrator permissions in groups.

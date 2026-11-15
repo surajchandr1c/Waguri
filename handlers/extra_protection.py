@@ -18,7 +18,11 @@ from database import (
     update_group_feature,
 )
 from handlers.admin_check import check_bot_permissions, is_sender_admin_or_owner
-from handlers.anti_link import check_user_bio_link, schedule_warning_cleanup
+from handlers.anti_link import (
+    check_user_bio_link,
+    dispatch_bio_link_violation,
+    schedule_warning_cleanup,
+)
 
 logger = logging.getLogger("Waguri.ExtraProtection")
 
@@ -145,63 +149,8 @@ async def handle_new_chat_members(update: Update, context: ContextTypes.DEFAULT_
                 add_user_warning(chat.id, member.id, f"Bio Link on Join: {bio_url}")
                 increment_stat(chat.id, "warnings_issued", count=1, chat_title=chat_title)
                 log_moderation_event(chat.id, member.id, "BIO_LINK_JOIN", f"Member joined with bio link: {bio_url}")
-                user_name = html.escape(member.first_name or member.username or str(member.id))
-                cleanup_delay = settings.get("warning_delete_after_seconds", 10)
-
-                # Check if joining user reached warning limit for auto-restriction
-                warnings_count = get_user_warnings_count(chat.id, member.id)
-                warning_limit = settings.get("warning_limit", 2)
-                if settings.get("auto_restrict_enabled", True) and warnings_count >= warning_limit:
-                    _, can_restrict = await check_bot_permissions(
-                        chat, context.bot, need_delete=False, need_restrict=True
-                    )
-                    if can_restrict:
-                        from handlers.anti_spam import restrict_user_24h
-                        restr_duration = settings.get("restriction_duration_seconds", 86400)
-                        await restrict_user_24h(chat, member, context.bot, duration_seconds=restr_duration)
-                        increment_stat(chat.id, "restrictions_applied", count=1, chat_title=chat_title)
-                        record_restriction(
-                            chat.id,
-                            member.id,
-                            member.username,
-                            "Bio link warning limit reached on join",
-                            time.time(),
-                            time.time() + restr_duration,
-                        )
-                        log_moderation_event(
-                            chat.id,
-                            member.id,
-                            "USER_RESTRICTED",
-                            f"Restricted on join for {restr_duration}s due to repeated bio link violations",
-                        )
-                        restr_text = (
-                            f"🚫 <b>User Restricted:</b> <a href=\"tg://user?id={member.id}\">{user_name}</a> "
-                            f"has been restricted from sending messages for {restr_duration // 3600} hours "
-                            "due to repeated bio link violations."
-                        )
-                        try:
-                            r_msg = await context.bot.send_message(
-                                chat_id=chat.id,
-                                text=restr_text,
-                                parse_mode=ParseMode.HTML,
-                            )
-                            asyncio.create_task(
-                                schedule_warning_cleanup(r_msg, delay_seconds=cleanup_delay)
-                            )
-                        except Exception:
-                            pass
-                        continue
-
-                warn_text = (
-                    f"⚠️ <b>Bio Link Warning:</b> <a href=\"tg://user?id={member.id}\">{user_name}</a>, "
-                    f"links in your profile bio (<code>{html.escape(bio_url)}</code>) are not allowed in this group. "
-                    "Please remove the link from your bio."
-                )
-                try:
-                    warn_msg = await context.bot.send_message(chat_id=chat.id, text=warn_text, parse_mode=ParseMode.HTML)
-                    asyncio.create_task(schedule_warning_cleanup(warn_msg, delay_seconds=cleanup_delay))
-                except Exception:
-                    pass
+                if await dispatch_bio_link_violation(chat, member, bio_url, context, settings, on_join=True):
+                    continue
 
 
 async def handle_service_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -1,7 +1,7 @@
 import logging
 import time
 from telegram import Chat, User
-from telegram.constants import ChatMemberStatus
+from telegram.constants import ChatMemberStatus, ChatType
 from telegram.error import TelegramError
 import config
 from config import ADMIN_CACHE_TTL_SECONDS, BOT_OWNER_IDS
@@ -209,3 +209,25 @@ def invalidate_cache(chat_id: int | None = None) -> None:
     else:
         _admin_cache.pop(chat_id, None)
         _bot_perm_cache.pop(chat_id, None)
+
+
+async def verify_group_or_channel_admin(update, bot) -> bool:
+    """Validate that a command is issued in an authorized group or channel by an admin."""
+    message = getattr(update, "effective_message", None)
+    chat = getattr(update, "effective_chat", None)
+    user = getattr(update, "effective_user", None)
+
+    if not message or not chat:
+        return False
+
+    if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL):
+        await message.reply_text("This command can only be used in a group or channel.")
+        return False
+
+    sender_chat = getattr(message, "sender_chat", None)
+    is_admin = await is_sender_admin_or_owner(chat, user, sender_chat, bot)
+    if not is_admin:
+        await message.reply_text("You need administrator privileges to use this command.")
+        return False
+
+    return True

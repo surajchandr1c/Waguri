@@ -22,8 +22,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not message or not chat:
         return
 
-    # In private chat, display the rich private dashboard
+    # In private chat, display the rich private dashboard (or personal auto-reply if deep-linked)
     if chat.type == ChatType.PRIVATE:
+        if context.args and context.args[0] == "personal":
+            from handlers.personal_autoreply import personal_command
+            await personal_command(update, context)
+            return
         bot_user = await context.bot.get_me()
         bot_username = bot_user.username or "Ms_Waguri_bot"
         text, markup = build_private_start_markup(bot_username)

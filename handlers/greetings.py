@@ -36,6 +36,32 @@ def get_user_display_name(update: Update) -> str:
     return "there"
 
 
+async def _send_greeting_reply(message: Message, chat, user_name: str, source_label: str, extra_detail: str = "") -> None:
+    """Consolidated helper to format, dispatch, and log greeting replies."""
+    greeting_text = f"Hii {user_name}"
+    chat_title = chat.title or "Chat"
+    detail_str = f" | {extra_detail}" if extra_detail else ""
+    logger.info(
+        "[%s] Group/Channel: '%s' (ID: %s) | User: %s%s | Action: Sent '%s'",
+        source_label,
+        chat_title,
+        chat.id,
+        user_name,
+        detail_str,
+        greeting_text,
+    )
+    try:
+        await message.reply_text(greeting_text)
+    except Exception as exc:
+        logger.error(
+            "[%s ERROR] Failed to send greeting in '%s' (ID: %s): %s",
+            source_label,
+            chat_title,
+            chat.id,
+            exc,
+        )
+
+
 async def handle_greeting_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Respond to users who send greetings like 'Hii', 'hy', 'hyy', 'hello', 'hlw', 'hi', or 'hey' with:
@@ -57,27 +83,7 @@ async def handle_greeting_message(update: Update, context: ContextTypes.DEFAULT_
         return
 
     user_name = get_user_display_name(update)
-    greeting_text = f"Hii {user_name}"
-
-    chat_title = chat.title or "Chat"
-    logger.info(
-        "[GREETING] Group/Channel: '%s' (ID: %s) | User: %s | Text: '%s' | Action: Sent '%s'",
-        chat_title,
-        chat.id,
-        user_name,
-        text.strip(),
-        greeting_text,
-    )
-
-    try:
-        await message.reply_text(greeting_text)
-    except Exception as exc:
-        logger.error(
-            "[GREETING ERROR] Failed to send greeting message in '%s' (ID: %s): %s",
-            chat_title,
-            chat.id,
-            exc,
-        )
+    await _send_greeting_reply(message, chat, user_name, "GREETING", f"Text: '{text.strip()}'")
 
 
 async def greeting_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -89,26 +95,7 @@ async def greeting_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     user_name = get_user_display_name(update)
-    greeting_text = f"Hii {user_name}"
-
-    chat_title = chat.title or "Chat"
-    logger.info(
-        "[GREETING COMMAND] Group/Channel: '%s' (ID: %s) | User: %s | Action: Sent '%s'",
-        chat_title,
-        chat.id,
-        user_name,
-        greeting_text,
-    )
-
-    try:
-        await message.reply_text(greeting_text)
-    except Exception as exc:
-        logger.error(
-            "[GREETING COMMAND ERROR] Failed to send reply in '%s' (ID: %s): %s",
-            chat_title,
-            chat.id,
-            exc,
-        )
+    await _send_greeting_reply(message, chat, user_name, "GREETING COMMAND")
 
 
 def register_greeting_handlers(application: Application) -> None:

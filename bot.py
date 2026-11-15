@@ -1,5 +1,6 @@
 import sys
-from telegram.error import InvalidToken, NetworkError, TimedOut
+from telegram import Update
+from telegram.error import Conflict, InvalidToken, NetworkError, TimedOut
 from telegram.ext import ApplicationBuilder
 from telegram.request import HTTPXRequest
 
@@ -21,9 +22,13 @@ from handlers import (
     antibiolink_command,
     antispam_command,
     antlink_command,
+    autoreply_off_command,
+    autoreply_on_command,
     ban_command,
     blacklist_command,
     build_main_help_markup,
+    build_personal_settings_markup,
+    business_stats_command,
     check_bot_permissions,
     cleanservice_command,
     compute_message_fingerprint,
@@ -32,20 +37,27 @@ from handlers import (
     disable_command,
     enable_command,
     error_handler,
+    exclude_user_command,
     features_command,
     greeting_command,
     handle_anti_forward,
     handle_anti_spam,
+    handle_business_connection,
+    handle_business_message,
     handle_channel_post,
+    handle_deleted_business_messages,
+    handle_edited_business_message,
     handle_greeting_message,
     handle_group_message,
     handle_media_restrictions,
     handle_my_chat_member,
     handle_new_chat_members,
+    handle_private_reply_message_input,
     handle_service_message,
     help_callback_handler,
     help_command,
     id_command,
+    include_user_command,
     interactive_help_command,
     is_bot_owner,
     is_greeting,
@@ -53,12 +65,19 @@ from handlers import (
     is_sender_admin_or_owner,
     logs_command,
     mute_command,
+    mystatus_command,
     owner_command,
+    personal_callback_handler,
+    personal_command,
+    preview_command,
     process_link_message,
     raid_command,
     register_all_handlers,
+    register_personal_autoreply_handlers,
+    resetmessage_command,
     resetwarnings_command,
     restrict_user_24h,
+    setmessage_command,
     settings_callback_handler,
     settings_command,
     setup_command_menu,
@@ -120,6 +139,23 @@ __all__ = [
     "handle_anti_spam",
     "compute_message_fingerprint",
     "restrict_user_24h",
+    "personal_command",
+    "autoreply_on_command",
+    "autoreply_off_command",
+    "setmessage_command",
+    "preview_command",
+    "mystatus_command",
+    "resetmessage_command",
+    "exclude_user_command",
+    "include_user_command",
+    "business_stats_command",
+    "handle_business_connection",
+    "handle_business_message",
+    "handle_edited_business_message",
+    "handle_deleted_business_messages",
+    "personal_callback_handler",
+    "build_personal_settings_markup",
+    "register_personal_autoreply_handlers",
     "setup_command_menu",
     "error_handler",
     "validate_token",
@@ -161,13 +197,20 @@ def main() -> None:
         # Register all features (commands, admin commands, anti-link, anti-spam, media, raid, error handling)
         register_all_handlers(application)
 
-        # Run the bot in polling mode with bootstrap retries and drop_pending_updates
+        # Run the bot in polling mode with bootstrap retries, drop_pending_updates, and all update types
         logger.info("Waguri bot is running in polling mode. Press Ctrl+C to stop.")
         application.run_polling(
             timeout=TELEGRAM_GET_UPDATES_TIMEOUT,
             bootstrap_retries=TELEGRAM_BOOTSTRAP_RETRIES,
             drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
         )
+    except Conflict:
+        logger.error(
+            "Conflict error: Another instance of this bot is already running. "
+            "Please terminate all other running bot instances before starting Waguri."
+        )
+        sys.exit(1)
     except InvalidToken:
         logger.error(
             "The Telegram server rejected the token. "
