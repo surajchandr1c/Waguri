@@ -14,7 +14,7 @@ function fetchRawDatabaseData() {
     if (fs.existsSync(/*turbopackIgnore: true*/ script)) {
       try {
         const stdout = execSync(`python "${script}"`, {
-          timeout: 4000,
+          timeout: 15000,
           encoding: 'utf-8',
           windowsHide: true,
         });
@@ -34,7 +34,7 @@ function fetchRawDatabaseData() {
 export async function GET() {
   const data = fetchRawDatabaseData();
   if (!data) {
-    return NextResponse.json({ error: 'Failed to read SQLite database' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to read MongoDB database' }, { status: 500 });
   }
 
   return NextResponse.json({

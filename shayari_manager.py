@@ -1,7 +1,6 @@
 import os
 import sys
 import json
-import sqlite3
 import random
 import urllib.request
 import urllib.error
@@ -11,17 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-def get_db_path():
-    candidates = [
-        os.path.join(os.path.dirname(__file__), "moderation.db"),
-        os.path.join(os.getcwd(), "moderation.db"),
-        os.path.join(os.getcwd(), "..", "moderation.db"),
-        r"c:\Users\Suraj\Desktop\New folder\bot\moderation.db",
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return os.path.abspath(c)
-    return "moderation.db"
+from database import get_db, get_next_sequence, get_db_path
 
 def get_bot_token():
     return os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
@@ -69,170 +58,82 @@ DEFAULT_SEEDS = [
         "content": "मंज़िल उन्हीं को मिलती है, जिनके सपनों में जान होती है,\nपंख से कुछ नहीं होता, हौसलों से उड़ान होती है।",
         "author": "Anonymous",
         "language": "Hindi",
-        "tags": "Motivation, Hardwork"
+        "tags": "Motivation, Ambition"
     },
     # Jokes
     {
         "category": "joke",
-        "content": "Teacher: 1 se 10 tak ginti sunao.\nPappu: 1, 2, 3, 4, 5, 7, 8, 9, 10.\nTeacher: 6 kahan gaya?\nPappu: Ji wo kal news mein bataya tha ki 6 log theek ho kar ghar chale gaye!",
-        "author": "Pappu Jokes",
-        "language": "Hinglish",
-        "tags": "Comedy, Laughs, School"
+        "content": "टीचर: बताओ न्यूटन का चौथा नियम क्या है?\nछात्र: जब परीक्षा सर पर हो, तब दिमाग़ का काम करना बंद हो जाना ही चौथा नियम है! 😂",
+        "author": "Classroom Fun",
+        "language": "Hindi",
+        "tags": "Student, Exam, Laugh"
     },
     {
         "category": "joke",
-        "content": "Doctor: Aapka vajan 10 kilo badh gaya hai, exercise shuru karo.\nPatient: Kaunsi exercise doctor sahab?\nDoctor: Mundi daayein se baayein hilana, jab koi khana offer kare!",
-        "author": "Desi Humor",
-        "language": "Hinglish",
-        "tags": "Doctor, Funny, Sarcasm"
-    },
-    # Memes / Media
-    {
-        "category": "meme",
-        "content": "Programmer at 3:00 AM:\n'Why isn't this code working?'\n\nProgrammer at 3:05 AM:\n'Why IS this code working?!'",
-        "author": "Dev Memes",
+        "content": "Doctor: How is your headache now?\nPatient: Doctor, she went to her mother's house yesterday! 🤣",
+        "author": "Classic Wit",
         "language": "English",
-        "tags": "Tech, Relatable, Coding"
-    },
-    {
-        "category": "meme",
-        "content": "Me: 'I will go to sleep early tonight.'\nMy brain at 2:00 AM: 'Do penguins have knees?'",
-        "author": "Late Night Thoughts",
-        "language": "English",
-        "tags": "Meme, Sleep, Relatable"
-    },
-    # Savage Roasts / Banter
-    {
-        "category": "roast",
-        "content": "You bring everyone so much joy and happiness... especially when you leave the group chat.",
-        "author": "Savage Bot",
-        "language": "English",
-        "tags": "Sarcasm, Roast, Banter"
-    },
-    {
-        "category": "roast",
-        "content": "I'd agree with you, but then we would both be completely wrong.",
-        "author": "Banter King",
-        "language": "English",
-        "tags": "Savage, Comeback, Sarcasm"
-    },
-    {
-        "category": "roast",
-        "content": "Bhai tu chup hi raha kar, jab tu bolta hai toh lagta hai dimaag 2G network par chal raha hai.",
-        "author": "Desi Roast",
-        "language": "Hinglish",
-        "tags": "Desi, Funny, Roast"
+        "tags": "Marriage, Laugh, Funny"
     },
     # Poems
     {
         "category": "poem",
-        "content": "वो अफ़्साना जिसे अंजाम तक लाना न हो मुमकिन,\nउसे इक ख़ूबसूरत मोड़ देकर छोड़ना अच्छा।\nतअ'ल्लुक़ बोझ बन जाए तो उस का तोड़ना अच्छा।",
-        "author": "Sahir Ludhianvi",
-        "language": "Urdu / Hindi",
-        "tags": "Poetry, Deep, Life"
+        "content": "लहरों से डर कर नौका पार नहीं होती,\nकोशिश करने वालों की कभी हार नहीं होती।\nनन्हीं चींटी जब दाना लेकर चलती है,\nचढ़ती दीवारों पर, सौ बार फिसलती है।\nमन का विश्वास रगों में साहस भरता है,\nचढ़कर गिरना, गिरकर चढ़ना न अखरता है।\nआख़िर उसकी मेहनत बेकार नहीं होती,\nकोशिश करने वालों की कभी हार नहीं होती।",
+        "author": "Harivansh Rai Bachchan",
+        "language": "Hindi",
+        "tags": "Courage, Perseverance, Classic"
     },
+    # Memes / Banter
     {
-        "category": "poem",
-        "content": "Two roads diverged in a wood, and I—\nI took the one less traveled by,\nAnd that has made all the difference.",
-        "author": "Robert Frost",
+        "category": "meme",
+        "content": "Me: Tomorrow I will wake up at 5 AM and completely fix my entire life.\nAlarm at 5 AM: *rings*\nMe: Who made this ridiculous plan anyway? 😴🛌",
+        "author": "Relatable Internet",
         "language": "English",
-        "tags": "Classic, Life, Choices"
+        "tags": "Sleep, Procrastination, Relatable"
     },
-    # Pickup Lines
+    # Roast / Savage
+    {
+        "category": "roast",
+        "content": "आइना भी जब तुम्हारी शक्ल देखता है,\nतो सोचता है कि काश मैं चश्मा होता ताकि धुंधला देख पाता! 🔥😎",
+        "author": "Friendly Banter",
+        "language": "Hindi",
+        "tags": "Banter, Savage, Fun"
+    },
+    # Pickup Line
     {
         "category": "pickup_line",
-        "content": "Are you a magician? Because whenever I look at you, everyone else in the room disappears.",
+        "content": "Are you a magician? Because whenever I look around this whole group chat, everyone disappears and there's only you. ✨",
         "author": "Smooth Operator",
-        "language": "English",
-        "tags": "Flirty, Cute, Romantic"
-    },
-    {
-        "category": "pickup_line",
-        "content": "Kya aapka naam Google hai? Kyunki jo bhi dhoondh raha tha, sab aapme mil gaya.",
-        "author": "Desi Romance",
-        "language": "Hinglish",
-        "tags": "Desi, Flirty, Fun"
-    },
-    {
-        "category": "pickup_line",
-        "content": "Are you Wi-Fi? Because I'm definitely feeling a strong connection here.",
-        "author": "Tech Romance",
         "language": "English",
         "tags": "Cheesy, Witty, Fun"
     }
 ]
 
 def init_tables():
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS shayari_content (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        category TEXT NOT NULL,
-        content TEXT NOT NULL,
-        author TEXT,
-        language TEXT DEFAULT 'Hindi / English',
-        media_url TEXT,
-        tags TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS scheduled_shayari (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        category TEXT NOT NULL DEFAULT 'all',
-        content_id INTEGER,
-        custom_text TEXT,
-        target_type TEXT DEFAULT 'all_gc',
-        target_chat_ids TEXT,
-        schedule_type TEXT DEFAULT 'recurring',
-        scheduled_time TEXT NOT NULL,
-        repeat_interval TEXT DEFAULT 'daily',
-        status TEXT DEFAULT 'active',
-        total_delivered INTEGER DEFAULT 0,
-        last_sent_at TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS shayari_send_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        scheduled_id INTEGER,
-        content_id INTEGER,
-        category TEXT,
-        chat_id INTEGER NOT NULL,
-        chat_title TEXT NOT NULL,
-        sent_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        status TEXT DEFAULT 'success',
-        details TEXT
-    )
-    """)
+    db = get_db()
+    db["shayari_content"].create_index("id", unique=True)
+    db["shayari_content"].create_index("category")
+    db["scheduled_shayari"].create_index("id", unique=True)
+    db["scheduled_shayari"].create_index("status")
+    db["shayari_send_logs"].create_index("id", unique=True)
+    db["shayari_send_logs"].create_index("scheduled_id")
 
     # Seed initial items if empty
-    cur.execute("SELECT COUNT(*) FROM shayari_content")
-    count = cur.fetchone()[0]
-    if count == 0:
+    if db["shayari_content"].count_documents({}) == 0:
+        now_iso = datetime.now().isoformat()
         for seed in DEFAULT_SEEDS:
-            cur.execute("""
-            INSERT INTO shayari_content (category, content, author, language, media_url, tags)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                seed["category"],
-                seed["content"],
-                seed.get("author", "Anonymous"),
-                seed.get("language", "Hindi / English"),
-                seed.get("media_url", ""),
-                seed.get("tags", "")
-            ))
-        conn.commit()
-
-    conn.close()
+            new_id = get_next_sequence("shayari_content", db=db)
+            db["shayari_content"].insert_one({
+                "id": new_id,
+                "category": seed["category"],
+                "content": seed["content"],
+                "author": seed.get("author", "Anonymous"),
+                "language": seed.get("language", "Hindi / English"),
+                "media_url": seed.get("media_url", ""),
+                "tags": seed.get("tags", ""),
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            })
 
 def parse_interval_to_timedelta(interval: str) -> timedelta:
     if not interval or interval == "none":
@@ -243,7 +144,6 @@ def parse_interval_to_timedelta(interval: str) -> timedelta:
     if s == "weekly" or s == "week":
         return timedelta(days=7)
 
-    # Check minute suffixes
     for suffix in ["minutes", "minute", "mins", "min", "m"]:
         if s.endswith(suffix):
             val_str = s[:-len(suffix)]
@@ -252,7 +152,6 @@ def parse_interval_to_timedelta(interval: str) -> timedelta:
             except ValueError:
                 pass
 
-    # Check hour suffixes
     for suffix in ["hours", "hour", "hrs", "hr", "h"]:
         if s.endswith(suffix):
             val_str = s[:-len(suffix)]
@@ -261,7 +160,6 @@ def parse_interval_to_timedelta(interval: str) -> timedelta:
             except ValueError:
                 pass
 
-    # Check day suffixes
     for suffix in ["days", "day", "d"]:
         if s.endswith(suffix):
             val_str = s[:-len(suffix)]
@@ -300,14 +198,12 @@ def compute_next_datetime(base_dt_str: str, interval_str: str) -> str:
     return next_dt.strftime("%Y-%m-%dT%H:%M:%S")
 
 def get_active_group_chats():
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT chat_id, chat_title, chat_type FROM chats WHERE is_active = 1 AND chat_type IN ('group', 'supergroup') ORDER BY chat_title ASC")
-    chats = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return chats
+    db = get_db()
+    cursor = db["chats"].find(
+        {"is_active": 1, "chat_type": {"$in": ["group", "supergroup"]}},
+        {"_id": 0, "chat_id": 1, "chat_title": 1, "chat_type": 1}
+    ).sort("chat_title", 1)
+    return list(cursor)
 
 def format_shayari_message(category: str, content: str, author: str = None) -> str:
     cat_headers = {
@@ -355,18 +251,13 @@ def send_telegram_message(chat_id: int, text: str) -> dict:
 
 def broadcast_scheduled_shayari(scheduled_id: int) -> dict:
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM scheduled_shayari WHERE id = ? LIMIT 1", (scheduled_id,))
-    row = cur.fetchone()
+    db = get_db()
+    row = db["scheduled_shayari"].find_one({"id": scheduled_id})
     if not row:
-        conn.close()
         return {"success": False, "error": "Scheduled item not found"}
 
     item = dict(row)
+    item.pop("_id", None)
     category = item.get("category", "all")
     content_id = item.get("content_id")
     custom_text = item.get("custom_text")
@@ -379,29 +270,24 @@ def broadcast_scheduled_shayari(scheduled_id: int) -> dict:
         content_to_send = custom_text.strip()
         author_to_send = "Admin"
     elif content_id:
-        cur.execute("SELECT * FROM shayari_content WHERE id = ? LIMIT 1", (content_id,))
-        c_row = cur.fetchone()
+        c_row = db["shayari_content"].find_one({"id": content_id})
         if c_row:
-            c_dict = dict(c_row)
-            content_to_send = c_dict["content"]
-            author_to_send = c_dict.get("author", "Anonymous")
-            actual_category = c_dict.get("category", category)
+            content_to_send = c_row["content"]
+            author_to_send = c_row.get("author", "Anonymous")
+            actual_category = c_row.get("category", category)
     else:
         # Rotate from category
-        if category == "all" or not category:
-            cur.execute("SELECT * FROM shayari_content ORDER BY RANDOM() LIMIT 1")
-        else:
-            cur.execute("SELECT * FROM shayari_content WHERE category = ? ORDER BY RANDOM() LIMIT 1", (category,))
-        c_row = cur.fetchone()
-        if c_row:
-            c_dict = dict(c_row)
+        match_query = {} if (category == "all" or not category) else {"category": category}
+        pipeline = [{"$match": match_query}, {"$sample": {"size": 1}}]
+        samples = list(db["shayari_content"].aggregate(pipeline))
+        if samples:
+            c_dict = samples[0]
             content_to_send = c_dict["content"]
             author_to_send = c_dict.get("author", "Anonymous")
             actual_category = c_dict.get("category", category)
             content_id = c_dict["id"]
 
     if not content_to_send:
-        conn.close()
         return {"success": False, "error": "No content available to send"}
 
     message_text = format_shayari_message(actual_category, content_to_send, author_to_send)
@@ -411,7 +297,8 @@ def broadcast_scheduled_shayari(scheduled_id: int) -> dict:
     targets = []
     if target_type == "selected" and item.get("target_chat_ids"):
         try:
-            sel_ids = json.loads(item["target_chat_ids"])
+            raw_ids = item["target_chat_ids"]
+            sel_ids = json.loads(raw_ids) if isinstance(raw_ids, str) else raw_ids
             targets = [g for g in all_gcs if g["chat_id"] in sel_ids]
         except Exception:
             targets = all_gcs
@@ -419,8 +306,8 @@ def broadcast_scheduled_shayari(scheduled_id: int) -> dict:
         targets = all_gcs
 
     if not targets:
-        cur.execute("SELECT chat_id, chat_title, chat_type FROM chats WHERE is_active = 1 LIMIT 5")
-        targets = [dict(r) for r in cur.fetchall()]
+        cursor = db["chats"].find({"is_active": 1}, {"_id": 0, "chat_id": 1, "chat_title": 1, "chat_type": 1}).limit(5)
+        targets = list(cursor)
 
     now_iso = datetime.now().isoformat()
     success_count = 0
@@ -429,7 +316,7 @@ def broadcast_scheduled_shayari(scheduled_id: int) -> dict:
 
     for gc in targets:
         cid = gc["chat_id"]
-        title = gc["chat_title"]
+        title = gc.get("chat_title") or f"Chat {cid}"
         res = send_telegram_message(cid, message_text)
         is_ok = res.get("ok", False)
         status = "success" if is_ok else "failed"
@@ -440,43 +327,52 @@ def broadcast_scheduled_shayari(scheduled_id: int) -> dict:
         else:
             fail_count += 1
 
-        cur.execute("""
-        INSERT INTO shayari_send_logs (scheduled_id, content_id, category, chat_id, chat_title, sent_at, status, details)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (scheduled_id, content_id, actual_category, cid, title, now_iso, status, details))
+        log_id = get_next_sequence("shayari_send_logs", db=db)
+        db["shayari_send_logs"].insert_one({
+            "id": log_id,
+            "scheduled_id": scheduled_id,
+            "content_id": content_id,
+            "category": actual_category,
+            "chat_id": cid,
+            "chat_title": title,
+            "sent_at": now_iso,
+            "status": status,
+            "details": details,
+        })
 
         results.append({"chat_id": cid, "chat_title": title, "ok": is_ok, "details": details})
 
     new_total = (item.get("total_delivered") or 0) + success_count
-    cur.execute("""
-    UPDATE scheduled_shayari
-    SET last_sent_at = ?, total_delivered = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-    """, (now_iso, new_total, scheduled_id))
-
-    conn.commit()
-    conn.close()
+    db["scheduled_shayari"].update_one(
+        {"id": scheduled_id},
+        {
+            "$set": {
+                "last_sent_at": now_iso,
+                "total_delivered": new_total,
+                "updated_at": now_iso,
+            }
+        }
+    )
 
     return {
-        "success": success_count > 0,
+        "success": True,
         "scheduled_id": scheduled_id,
         "total_targets": len(targets),
         "success_count": success_count,
         "fail_count": fail_count,
         "results": results,
-        "sent_at": now_iso
+        "sent_at": now_iso,
     }
 
 def process_due_shayari():
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM scheduled_shayari WHERE status = 'active'")
-    active_items = [dict(r) for r in cur.fetchall()]
-    conn.close()
+    db = get_db()
+    cursor = db["scheduled_shayari"].find({"status": "active"})
+    active_items = []
+    for doc in cursor:
+        d = dict(doc)
+        d.pop("_id", None)
+        active_items.append(d)
 
     now = datetime.now()
     results = []
@@ -498,28 +394,21 @@ def process_due_shayari():
             if (now - last_sent_dt).total_seconds() < min_cooldown_seconds:
                 continue
 
-        send_res = broadcast_scheduled_shayari(item["id"])
-        results.append({"id": item["id"], "result": send_res})
+        res = broadcast_scheduled_shayari(item["id"])
+        results.append({"id": item["id"], "result": res})
 
-        conn = sqlite3.connect(db_path)
-        cur = conn.cursor()
+        # Recurrence handling
         if item.get("schedule_type") == "recurring":
             next_time_str = (datetime.now() + interval_delta).strftime("%Y-%m-%dT%H:%M:%S")
-
-            cur.execute("""
-            UPDATE scheduled_shayari
-            SET scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """, (next_time_str, item["id"]))
+            db["scheduled_shayari"].update_one(
+                {"id": item["id"]},
+                {"$set": {"scheduled_time": next_time_str, "updated_at": datetime.now().isoformat()}}
+            )
         else:
-            cur.execute("""
-            UPDATE scheduled_shayari
-            SET status = 'completed', updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """, (item["id"],))
-
-        conn.commit()
-        conn.close()
+            db["scheduled_shayari"].update_one(
+                {"id": item["id"]},
+                {"$set": {"status": "completed", "updated_at": datetime.now().isoformat()}}
+            )
 
     return results
 
@@ -530,160 +419,157 @@ def list_all():
     except Exception:
         pass
 
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    db = get_db()
+    content_list = []
+    for doc in db["shayari_content"].find().sort("id", -1):
+        d = dict(doc)
+        d.pop("_id", None)
+        content_list.append(d)
 
-    cur.execute("SELECT * FROM shayari_content ORDER BY id DESC")
-    items = [dict(r) for r in cur.fetchall()]
+    schedules = []
+    for doc in db["scheduled_shayari"].find().sort("id", -1):
+        d = dict(doc)
+        d.pop("_id", None)
+        schedules.append(d)
 
-    cur.execute("SELECT * FROM scheduled_shayari ORDER BY id DESC")
-    scheduled_items = [dict(r) for r in cur.fetchall()]
+    logs = []
+    for doc in db["shayari_send_logs"].find().sort("id", -1).limit(50):
+        d = dict(doc)
+        d.pop("_id", None)
+        logs.append(d)
 
-    cur.execute("SELECT * FROM shayari_send_logs ORDER BY id DESC LIMIT 50")
-    logs = [dict(r) for r in cur.fetchall()]
-
-    # Available Group Chats
-    chats = get_active_group_chats()
-
-    conn.close()
-
-    category_counts = {}
-    for item in items:
-        cat = item.get("category", "other")
-        category_counts[cat] = category_counts.get(cat, 0) + 1
+    chats = []
+    for doc in db["chats"].find({"is_active": 1}).sort("chat_title", 1):
+        d = dict(doc)
+        d.pop("_id", None)
+        chats.append(d)
 
     return {
-        "items": items,
-        "scheduled_shayari": scheduled_items,
+        "content_items": content_list,
+        "scheduled": schedules,
         "logs": logs,
-        "total_count": len(items),
-        "category_counts": category_counts,
         "chats": chats,
-        "total_gcs": len(chats),
+        "total_content": len(content_list),
+        "total_gcs": len([c for c in chats if c.get("chat_type") in ("group", "supergroup")]),
         "server_time": datetime.now().isoformat(),
     }
 
 def add_item(data: dict):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-
-    category = data.get("category", "shayari").lower().strip()
+    db = get_db()
+    cat = data.get("category", "shayari").strip() or "shayari"
     content = data.get("content", "").strip()
     author = data.get("author", "").strip() or "Anonymous"
-    language = data.get("language", "Hinglish").strip()
+    lang = data.get("language", "Hindi / English").strip()
     media_url = data.get("media_url", "").strip()
     tags = data.get("tags", "").strip()
+    now_iso = datetime.now().isoformat()
 
-    if not content:
-        conn.close()
-        return {"success": False, "error": "Content cannot be empty"}
-
-    cur.execute("""
-    INSERT INTO shayari_content (category, content, author, language, media_url, tags)
-    VALUES (?, ?, ?, ?, ?, ?)
-    """, (category, content, author, language, media_url, tags))
-
-    new_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-
-    return {"success": True, "id": new_id, "message": "Content added successfully"}
+    new_id = get_next_sequence("shayari_content", db=db)
+    db["shayari_content"].insert_one({
+        "id": new_id,
+        "category": cat,
+        "content": content,
+        "author": author,
+        "language": lang,
+        "media_url": media_url,
+        "tags": tags,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    })
+    return {"success": True, "id": new_id, "message": "Content item added successfully"}
 
 def edit_item(item_id: int, data: dict):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-
-    cur.execute("SELECT id FROM shayari_content WHERE id = ?", (item_id,))
-    if not cur.fetchone():
-        conn.close()
+    db = get_db()
+    existing = db["shayari_content"].find_one({"id": item_id})
+    if not existing:
         return {"success": False, "error": f"Content item #{item_id} not found"}
 
-    category = data.get("category", "shayari").lower().strip()
+    cat = data.get("category", "shayari").strip() or "shayari"
     content = data.get("content", "").strip()
     author = data.get("author", "").strip() or "Anonymous"
-    language = data.get("language", "Hinglish").strip()
+    lang = data.get("language", "Hindi / English").strip()
     media_url = data.get("media_url", "").strip()
     tags = data.get("tags", "").strip()
+    now_iso = datetime.now().isoformat()
 
-    if not content:
-        conn.close()
-        return {"success": False, "error": "Content cannot be empty"}
-
-    cur.execute("""
-    UPDATE shayari_content
-    SET category = ?, content = ?, author = ?, language = ?, media_url = ?, tags = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-    """, (category, content, author, language, media_url, tags, item_id))
-
-    conn.commit()
-    conn.close()
-    return {"success": True, "id": item_id, "message": "Content updated successfully"}
+    db["shayari_content"].update_one(
+        {"id": item_id},
+        {
+            "$set": {
+                "category": cat,
+                "content": content,
+                "author": author,
+                "language": lang,
+                "media_url": media_url,
+                "tags": tags,
+                "updated_at": now_iso,
+            }
+        }
+    )
+    return {"success": True, "id": item_id, "message": "Content item updated successfully"}
 
 def delete_item(item_id: int):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM shayari_content WHERE id = ?", (item_id,))
-    conn.commit()
-    conn.close()
-    return {"success": True, "message": f"Deleted item {item_id}"}
+    db = get_db()
+    db["shayari_content"].delete_one({"id": item_id})
+    return {"success": True, "message": f"Deleted content item {item_id}"}
 
 def add_scheduled_shayari(data: dict):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-
+    db = get_db()
     title = data.get("title", "").strip() or "Daily Shayari Broadcast"
-    category = data.get("category", "all").strip().lower()
+    category = data.get("category", "all").strip() or "all"
     content_id = data.get("content_id")
-    if content_id is not None and content_id != "":
+    if content_id is not None and str(content_id).strip() != "":
         content_id = int(content_id)
     else:
         content_id = None
+
     custom_text = data.get("custom_text", "").strip() or None
     target_type = data.get("target_type", "all_gc")
     target_chat_ids = json.dumps(data.get("target_chat_ids", []))
     schedule_type = data.get("schedule_type", "recurring")
     scheduled_time = data.get("scheduled_time", "").strip() or datetime.now().strftime("%Y-%m-%dT%H:%M")
     repeat_interval = data.get("repeat_interval", "daily")
+    now_iso = datetime.now().isoformat()
 
-    cur.execute("""
-    INSERT INTO scheduled_shayari (title, category, content_id, custom_text, target_type, target_chat_ids, schedule_type, scheduled_time, repeat_interval, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
-    """, (title, category, content_id, custom_text, target_type, target_chat_ids, schedule_type, scheduled_time, repeat_interval))
-
-    new_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-
+    new_id = get_next_sequence("scheduled_shayari", db=db)
+    db["scheduled_shayari"].insert_one({
+        "id": new_id,
+        "title": title,
+        "category": category,
+        "content_id": content_id,
+        "custom_text": custom_text,
+        "target_type": target_type,
+        "target_chat_ids": target_chat_ids,
+        "schedule_type": schedule_type,
+        "scheduled_time": scheduled_time,
+        "repeat_interval": repeat_interval,
+        "status": "active",
+        "total_delivered": 0,
+        "last_sent_at": None,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    })
     return {"success": True, "id": new_id, "message": "Scheduled Shayari broadcast created successfully"}
 
 def edit_scheduled_shayari(scheduled_id: int, data: dict):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-
-    cur.execute("SELECT id FROM scheduled_shayari WHERE id = ?", (scheduled_id,))
-    if not cur.fetchone():
-        conn.close()
+    db = get_db()
+    existing = db["scheduled_shayari"].find_one({"id": scheduled_id})
+    if not existing:
         return {"success": False, "error": f"Scheduled broadcast #{scheduled_id} not found"}
 
     title = data.get("title", "").strip() or "Daily Shayari Broadcast"
-    category = data.get("category", "all").strip().lower()
+    category = data.get("category", "all").strip() or "all"
     content_id = data.get("content_id")
-    if content_id is not None and content_id != "":
+    if content_id is not None and str(content_id).strip() != "":
         content_id = int(content_id)
     else:
         content_id = None
+
     custom_text = data.get("custom_text", "").strip() or None
     target_type = data.get("target_type", "all_gc")
     target_chat_ids = json.dumps(data.get("target_chat_ids", []))
@@ -691,38 +577,43 @@ def edit_scheduled_shayari(scheduled_id: int, data: dict):
     scheduled_time = data.get("scheduled_time", "").strip() or datetime.now().strftime("%Y-%m-%dT%H:%M")
     repeat_interval = data.get("repeat_interval", "daily")
     status = data.get("status", "active")
+    now_iso = datetime.now().isoformat()
 
-    cur.execute("""
-    UPDATE scheduled_shayari
-    SET title = ?, category = ?, content_id = ?, custom_text = ?, target_type = ?,
-        target_chat_ids = ?, schedule_type = ?, scheduled_time = ?, repeat_interval = ?, status = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-    """, (title, category, content_id, custom_text, target_type, target_chat_ids,
-          schedule_type, scheduled_time, repeat_interval, status, scheduled_id))
-
-    conn.commit()
-    conn.close()
+    db["scheduled_shayari"].update_one(
+        {"id": scheduled_id},
+        {
+            "$set": {
+                "title": title,
+                "category": category,
+                "content_id": content_id,
+                "custom_text": custom_text,
+                "target_type": target_type,
+                "target_chat_ids": target_chat_ids,
+                "schedule_type": schedule_type,
+                "scheduled_time": scheduled_time,
+                "repeat_interval": repeat_interval,
+                "status": status,
+                "updated_at": now_iso,
+            }
+        }
+    )
     return {"success": True, "id": scheduled_id, "message": "Scheduled Shayari broadcast updated successfully"}
 
 def delete_scheduled_shayari(scheduled_id: int):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM scheduled_shayari WHERE id = ?", (scheduled_id,))
-    cur.execute("DELETE FROM shayari_send_logs WHERE scheduled_id = ?", (scheduled_id,))
-    conn.commit()
-    conn.close()
+    db = get_db()
+    db["scheduled_shayari"].delete_one({"id": scheduled_id})
+    db["shayari_send_logs"].delete_many({"scheduled_id": scheduled_id})
     return {"success": True, "message": f"Deleted scheduled broadcast {scheduled_id}"}
 
 def toggle_scheduled_status(scheduled_id: int, new_status: str):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute("UPDATE scheduled_shayari SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_status, scheduled_id))
-    conn.commit()
-    conn.close()
+    db = get_db()
+    now_iso = datetime.now().isoformat()
+    db["scheduled_shayari"].update_one(
+        {"id": scheduled_id},
+        {"$set": {"status": new_status, "updated_at": now_iso}}
+    )
     return {"success": True, "status": new_status}
 
 def broadcast_content(item_id: int, chat_id: str = "all_gc") -> dict:
@@ -732,23 +623,15 @@ def broadcast_content(item_id: int, chat_id: str = "all_gc") -> dict:
     if not token:
         return {"success": False, "error": "TELEGRAM_BOT_TOKEN not configured"}
 
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM shayari_content WHERE id = ? LIMIT 1", (item_id,))
-    row = cur.fetchone()
+    db = get_db()
+    row = db["shayari_content"].find_one({"id": item_id})
     if not row:
-        conn.close()
         return {"success": False, "error": "Content item not found"}
 
     item = dict(row)
     telegram_text = format_shayari_message(item["category"], item["content"], item.get("author"))
 
     all_gcs = get_active_group_chats()
-    conn.close()
-
     if chat_id == "all_gc" or not chat_id:
         targets = all_gcs
     else:
@@ -766,7 +649,7 @@ def broadcast_content(item_id: int, chat_id: str = "all_gc") -> dict:
 
     for gc in targets:
         cid = gc["chat_id"]
-        title = gc["chat_title"]
+        title = gc.get("chat_title") or f"Chat {cid}"
         res = send_telegram_message(cid, telegram_text)
         is_ok = res.get("ok", False)
         if is_ok:

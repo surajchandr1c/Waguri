@@ -349,7 +349,7 @@ export default function OverviewPage() {
                       System & Diagnostics
                     </h3>
                     <p className="text-xs text-zinc-400">
-                      SQLite multi-tenant health & environment
+                      MongoDB Atlas multi-tenant health & environment
                     </p>
                   </div>
                 </div>

@@ -2,7 +2,6 @@ import os
 import sys
 import json
 import time
-import sqlite3
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -11,96 +10,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-_STICKER_PACK_CACHE: dict[str, tuple[float, list[str]]] = {}
+from database import get_db, get_next_sequence, get_db_path
 
-def get_db_path():
-    candidates = [
-        os.path.join(os.path.dirname(__file__), "moderation.db"),
-        os.path.join(os.getcwd(), "moderation.db"),
-        os.path.join(os.getcwd(), "..", "moderation.db"),
-        r"c:\Users\Suraj\Desktop\New folder\bot\moderation.db",
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return os.path.abspath(c)
-    return "moderation.db"
+_STICKER_PACK_CACHE: dict[str, tuple[float, list[str]]] = {}
 
 def get_bot_token():
     return os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
 
 def init_tables():
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS scheduled_stickers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_id INTEGER NOT NULL DEFAULT 0,
-        chat_title TEXT NOT NULL DEFAULT '',
-        sticker_url TEXT NOT NULL,
-        sticker_name TEXT,
-        target_type TEXT DEFAULT 'all_gc',
-        target_chat_ids TEXT,
-        schedule_type TEXT DEFAULT 'recurring',
-        scheduled_time TEXT NOT NULL,
-        repeat_interval TEXT DEFAULT '3min',
-        status TEXT DEFAULT 'active',
-        last_sent_at TEXT,
-        sticker_pack_name TEXT,
-        current_index INTEGER DEFAULT 0,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS sticker_send_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        scheduled_id INTEGER,
-        chat_id INTEGER NOT NULL,
-        chat_title TEXT NOT NULL,
-        sticker_url TEXT NOT NULL,
-        sent_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        status TEXT DEFAULT 'success',
-        details TEXT
-    )
-    """)
-
-    cur.execute("PRAGMA table_info(scheduled_stickers)")
-    cols = [r[1] for r in cur.fetchall()]
-    if "target_type" not in cols:
-        try:
-            cur.execute("ALTER TABLE scheduled_stickers ADD COLUMN target_type TEXT DEFAULT 'all_gc'")
-        except Exception:
-            pass
-    if "target_chat_ids" not in cols:
-        try:
-            cur.execute("ALTER TABLE scheduled_stickers ADD COLUMN target_chat_ids TEXT")
-        except Exception:
-            pass
-    if "sticker_pack_name" not in cols:
-        try:
-            cur.execute("ALTER TABLE scheduled_stickers ADD COLUMN sticker_pack_name TEXT")
-        except Exception:
-            pass
-    if "current_index" not in cols:
-        try:
-            cur.execute("ALTER TABLE scheduled_stickers ADD COLUMN current_index INTEGER DEFAULT 0")
-        except Exception:
-            pass
-
-    conn.commit()
-    conn.close()
+    db = get_db()
+    db["scheduled_stickers"].create_index("id", unique=True)
+    db["scheduled_stickers"].create_index("status")
+    db["sticker_send_logs"].create_index("id", unique=True)
+    db["sticker_send_logs"].create_index("scheduled_id")
 
 def parse_interval_to_timedelta(interval: str) -> timedelta:
-    if not interval or interval == "none":
+    if not interval:
         return timedelta(minutes=3)
     s = str(interval).strip().lower().replace(" ", "")
-    if s in ("daily", "day"):
-        return timedelta(days=1)
-    if s in ("weekly", "week"):
-        return timedelta(days=7)
 
-    # Check minute suffixes
     for suffix in ["minutes", "minute", "mins", "min", "m"]:
         if s.endswith(suffix):
             val_str = s[:-len(suffix)]
@@ -109,7 +37,6 @@ def parse_interval_to_timedelta(interval: str) -> timedelta:
             except ValueError:
                 pass
 
-    # Check hour suffixes
     for suffix in ["hours", "hour", "hrs", "hr", "h"]:
         if s.endswith(suffix):
             val_str = s[:-len(suffix)]
@@ -118,14 +45,16 @@ def parse_interval_to_timedelta(interval: str) -> timedelta:
             except ValueError:
                 pass
 
-    # Check day suffixes
-    for suffix in ["days", "day", "d"]:
+    for suffix in ["seconds", "second", "secs", "sec", "s"]:
         if s.endswith(suffix):
             val_str = s[:-len(suffix)]
             try:
-                return timedelta(days=int(val_str))
+                return timedelta(seconds=max(10, int(val_str)))
             except ValueError:
                 pass
+
+    if s == "daily" or s == "day":
+        return timedelta(days=1)
 
     try:
         val = int(s)
@@ -148,14 +77,12 @@ def parse_dt(val: str | None) -> datetime | None:
         return None
 
 def get_active_group_chats():
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT chat_id, chat_title, chat_type FROM chats WHERE is_active = 1 AND chat_type IN ('group', 'supergroup') ORDER BY chat_title ASC")
-    chats = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return chats
+    db = get_db()
+    cursor = db["chats"].find(
+        {"is_active": 1, "chat_type": {"$in": ["group", "supergroup"]}},
+        {"_id": 0, "chat_id": 1, "chat_title": 1, "chat_type": 1}
+    ).sort("chat_title", 1)
+    return list(cursor)
 
 def extract_pack_name(input_str: str) -> str | None:
     """Extract sticker pack name from link or identifier"""
@@ -205,11 +132,12 @@ def get_pack_stickers(pack_name: str) -> list[str]:
 
     return []
 
-def resolve_next_sticker(sticker_id: int, cur: sqlite3.Cursor, item: dict) -> tuple[str, str]:
+def resolve_next_sticker(sticker_id: int, item: dict, db=None) -> tuple[str, str]:
     """
     Cycles to the next sticker in the pack so a different sticker is sent every interval.
     If it's a single sticker file_id, returns it directly.
     """
+    target_db = db if db is not None else get_db()
     raw_url = item.get("sticker_url") or ""
     pack_name = item.get("sticker_pack_name") or extract_pack_name(raw_url)
 
@@ -220,11 +148,10 @@ def resolve_next_sticker(sticker_id: int, cur: sqlite3.Cursor, item: dict) -> tu
             selected_file_id = file_ids[curr_idx % len(file_ids)]
             next_idx = (curr_idx + 1) % len(file_ids)
 
-            cur.execute("""
-            UPDATE scheduled_stickers
-            SET current_index = ?, sticker_pack_name = ?
-            WHERE id = ?
-            """, (next_idx, pack_name, sticker_id))
+            target_db["scheduled_stickers"].update_one(
+                {"id": sticker_id},
+                {"$set": {"current_index": next_idx, "sticker_pack_name": pack_name}}
+            )
 
             note = f"Sticker #{curr_idx % len(file_ids) + 1} of {len(file_ids)} from pack '{pack_name}'"
             return selected_file_id, note
@@ -268,18 +195,13 @@ def send_now(sticker_id: int):
     cycling to a different sticker each time if a pack is configured.
     """
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM scheduled_stickers WHERE id = ? LIMIT 1", (sticker_id,))
-    item = cur.fetchone()
+    db = get_db()
+    item = db["scheduled_stickers"].find_one({"id": sticker_id})
     if not item:
-        conn.close()
         return {"success": False, "error": "Scheduled sticker not found"}
 
     item = dict(item)
+    item.pop("_id", None)
     all_gcs = get_active_group_chats()
 
     target_type = item.get("target_type") or "all_gc"
@@ -288,7 +210,8 @@ def send_now(sticker_id: int):
         targets = all_gcs
     elif target_type == "selected" and item.get("target_chat_ids"):
         try:
-            sel_ids = json.loads(item["target_chat_ids"])
+            raw_ids = item["target_chat_ids"]
+            sel_ids = json.loads(raw_ids) if isinstance(raw_ids, str) else raw_ids
             targets = [g for g in all_gcs if g["chat_id"] in sel_ids]
         except Exception:
             targets = all_gcs
@@ -301,7 +224,7 @@ def send_now(sticker_id: int):
         targets = all_gcs
 
     # Determine which sticker to send for this interval cycle
-    sticker_to_send, pack_note = resolve_next_sticker(sticker_id, cur, item)
+    sticker_to_send, pack_note = resolve_next_sticker(sticker_id, item, db=db)
 
     now_iso = datetime.now().isoformat()
     success_count = 0
@@ -310,7 +233,7 @@ def send_now(sticker_id: int):
 
     for gc in targets:
         cid = gc["chat_id"]
-        title = gc["chat_title"]
+        title = gc.get("chat_title") or f"Group {cid}"
         result = send_sticker_api(cid, sticker_to_send)
         is_ok = result.get("ok", False)
         status = "success" if is_ok else "failed"
@@ -321,22 +244,25 @@ def send_now(sticker_id: int):
         else:
             fail_count += 1
 
-        cur.execute("""
-        INSERT INTO sticker_send_logs (scheduled_id, chat_id, chat_title, sticker_url, sent_at, status, details)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (sticker_id, cid, title, sticker_to_send, now_iso, status, details))
+        log_id = get_next_sequence("sticker_send_logs", db=db)
+        db["sticker_send_logs"].insert_one({
+            "id": log_id,
+            "scheduled_id": sticker_id,
+            "chat_id": cid,
+            "chat_title": title,
+            "sticker_url": sticker_to_send,
+            "sent_at": now_iso,
+            "status": status,
+            "details": details,
+        })
 
         results.append({"chat_id": cid, "chat_title": title, "ok": is_ok, "details": details})
 
     if success_count > 0:
-        cur.execute("""
-        UPDATE scheduled_stickers
-        SET last_sent_at = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """, (now_iso, sticker_id))
-
-    conn.commit()
-    conn.close()
+        db["scheduled_stickers"].update_one(
+            {"id": sticker_id},
+            {"$set": {"last_sent_at": now_iso, "updated_at": now_iso}}
+        )
 
     return {
         "success": success_count > 0,
@@ -355,14 +281,13 @@ def process_due_stickers():
     strictly respecting the exact time gap (e.g. 3 min, 5 min, 10 min).
     """
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM scheduled_stickers WHERE status = 'active'")
-    active_items = [dict(r) for r in cur.fetchall()]
-    conn.close()
+    db = get_db()
+    cursor = db["scheduled_stickers"].find({"status": "active"})
+    active_items = []
+    for doc in cursor:
+        d = dict(doc)
+        d.pop("_id", None)
+        active_items.append(d)
 
     now = datetime.now()
     results = []
@@ -381,30 +306,25 @@ def process_due_stickers():
         if now < sched_dt:
             continue
 
-        # 2. Strict time gap check: ensure at least (interval - 15 seconds) has elapsed since last delivery
+        # 2. Strict time gap check
         if last_sent_dt:
             min_cooldown_seconds = max(10, interval_delta.total_seconds() - 15)
             elapsed_seconds = (now - last_sent_dt).total_seconds()
             if elapsed_seconds < min_cooldown_seconds:
                 continue
 
-        # Send sticker now (automatically advances to the next sticker in the pack)
+        # Send sticker now
         send_res = send_now(item["id"])
         results.append({"id": item["id"], "result": send_res})
 
-        # Calculate exact next send time: from now + interval_delta!
+        # Calculate exact next send time
         next_dt = datetime.now() + interval_delta
         next_dt_str = next_dt.strftime("%Y-%m-%dT%H:%M:%S")
 
-        conn = sqlite3.connect(db_path)
-        cur = conn.cursor()
-        cur.execute("""
-        UPDATE scheduled_stickers
-        SET scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """, (next_dt_str, item["id"]))
-        conn.commit()
-        conn.close()
+        db["scheduled_stickers"].update_one(
+            {"id": item["id"]},
+            {"$set": {"scheduled_time": next_dt_str, "updated_at": datetime.now().isoformat()}}
+        )
 
     return results
 
@@ -415,19 +335,20 @@ def list_all():
     except Exception:
         pass
 
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    db = get_db()
+    stickers = []
+    for doc in db["scheduled_stickers"].find().sort("id", -1):
+        d = dict(doc)
+        d.pop("_id", None)
+        stickers.append(d)
 
-    cur.execute("SELECT * FROM scheduled_stickers ORDER BY id DESC")
-    stickers = [dict(r) for r in cur.fetchall()]
-
-    cur.execute("SELECT * FROM sticker_send_logs ORDER BY id DESC LIMIT 50")
-    logs = [dict(r) for r in cur.fetchall()]
+    logs = []
+    for doc in db["sticker_send_logs"].find().sort("id", -1).limit(50):
+        d = dict(doc)
+        d.pop("_id", None)
+        logs.append(d)
 
     chats = get_active_group_chats()
-    conn.close()
 
     return {
         "scheduled_stickers": stickers,
@@ -439,9 +360,7 @@ def list_all():
 
 def add_sticker(data: dict):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
+    db = get_db()
 
     target_type = data.get("target_type", "all_gc")
     chat_id = int(data.get("chat_id") or 0)
@@ -454,29 +373,35 @@ def add_sticker(data: dict):
     if target_type == "all_gc":
         chat_title = "All Group Chats"
     elif not chat_title and chat_id:
-        cur.execute("SELECT chat_title FROM chats WHERE chat_id = ? LIMIT 1", (chat_id,))
-        row = cur.fetchone()
-        chat_title = row[0] if row else f"Group {chat_id}"
+        chat_row = db["chats"].find_one({"chat_id": chat_id})
+        chat_title = chat_row.get("chat_title") if chat_row else f"Group {chat_id}"
 
     pack_name = extract_pack_name(sticker_url)
 
     interval_delta = parse_interval_to_timedelta(repeat_interval)
     now_dt = datetime.now()
-    # Next send scheduled for exactly now + interval_delta
     next_time_str = (now_dt + interval_delta).strftime("%Y-%m-%dT%H:%M:%S")
 
-    cur.execute("""
-    INSERT INTO scheduled_stickers (
-        chat_id, chat_title, sticker_url, sticker_name, target_type, target_chat_ids,
-        schedule_type, scheduled_time, repeat_interval, status, sticker_pack_name, current_index
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 0)
-    """, (chat_id, chat_title, sticker_url, sticker_name, target_type, target_chat_ids,
-          'recurring', next_time_str, repeat_interval, pack_name))
+    new_id = get_next_sequence("scheduled_stickers", db=db)
+    now_iso = now_dt.isoformat()
 
-    new_id = cur.lastrowid
-    conn.commit()
-    conn.close()
+    db["scheduled_stickers"].insert_one({
+        "id": new_id,
+        "chat_id": chat_id,
+        "chat_title": chat_title,
+        "sticker_url": sticker_url,
+        "sticker_name": sticker_name,
+        "target_type": target_type,
+        "target_chat_ids": target_chat_ids,
+        "schedule_type": "recurring",
+        "scheduled_time": next_time_str,
+        "repeat_interval": repeat_interval,
+        "status": "active",
+        "sticker_pack_name": pack_name,
+        "current_index": 0,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    })
 
     # Automatically send the first sticker right away when activated
     try:
@@ -492,13 +417,9 @@ def add_sticker(data: dict):
 
 def edit_sticker(sticker_id: int, data: dict):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-
-    cur.execute("SELECT id FROM scheduled_stickers WHERE id = ?", (sticker_id,))
-    if not cur.fetchone():
-        conn.close()
+    db = get_db()
+    existing = db["scheduled_stickers"].find_one({"id": sticker_id})
+    if not existing:
         return {"success": False, "error": f"Scheduled sticker #{sticker_id} not found"}
 
     target_type = data.get("target_type", "all_gc")
@@ -513,81 +434,64 @@ def edit_sticker(sticker_id: int, data: dict):
     if target_type == "all_gc":
         chat_title = "All Group Chats"
     elif not chat_title and chat_id:
-        cur.execute("SELECT chat_title FROM chats WHERE chat_id = ? LIMIT 1", (chat_id,))
-        row = cur.fetchone()
-        chat_title = row[0] if row else f"Group {chat_id}"
+        chat_row = db["chats"].find_one({"chat_id": chat_id})
+        chat_title = chat_row.get("chat_title") if chat_row else f"Group {chat_id}"
 
     pack_name = extract_pack_name(sticker_url)
     interval_delta = parse_interval_to_timedelta(repeat_interval)
     next_time_str = (datetime.now() + interval_delta).strftime("%Y-%m-%dT%H:%M:%S")
+    now_iso = datetime.now().isoformat()
 
-    cur.execute("""
-    UPDATE scheduled_stickers
-    SET target_type = ?, chat_id = ?, chat_title = ?, target_chat_ids = ?,
-        sticker_url = ?, sticker_name = ?, repeat_interval = ?, status = ?,
-        sticker_pack_name = ?, scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-    """, (target_type, chat_id, chat_title, target_chat_ids, sticker_url, sticker_name,
-          repeat_interval, status, pack_name, next_time_str, sticker_id))
+    db["scheduled_stickers"].update_one(
+        {"id": sticker_id},
+        {
+            "$set": {
+                "target_type": target_type,
+                "chat_id": chat_id,
+                "chat_title": chat_title,
+                "target_chat_ids": target_chat_ids,
+                "sticker_url": sticker_url,
+                "sticker_name": sticker_name,
+                "repeat_interval": repeat_interval,
+                "status": status,
+                "sticker_pack_name": pack_name,
+                "scheduled_time": next_time_str,
+                "updated_at": now_iso,
+            }
+        }
+    )
 
-    conn.commit()
-    conn.close()
     return {"success": True, "id": sticker_id, "message": "Scheduled sticker updated successfully"}
 
 def delete_sticker(sticker_id: int):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM scheduled_stickers WHERE id = ?", (sticker_id,))
-    cur.execute("DELETE FROM sticker_send_logs WHERE scheduled_id = ?", (sticker_id,))
-    conn.commit()
-    conn.close()
+    db = get_db()
+    db["scheduled_stickers"].delete_one({"id": sticker_id})
+    db["sticker_send_logs"].delete_many({"scheduled_id": sticker_id})
     return {"success": True, "message": f"Deleted scheduled sticker {sticker_id}"}
 
 def toggle_status(sticker_id: int, new_status: str):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
+    db = get_db()
+    now_iso = datetime.now().isoformat()
 
     if new_status == 'active':
-        cur.execute("SELECT repeat_interval FROM scheduled_stickers WHERE id = ?", (sticker_id,))
-        row = cur.fetchone()
-        interval = row[0] if row else "3min"
+        row = db["scheduled_stickers"].find_one({"id": sticker_id})
+        interval = row.get("repeat_interval", "3min") if row else "3min"
         interval_delta = parse_interval_to_timedelta(interval)
-
-        # Set next send time to exactly now + interval_delta
         next_time_str = (datetime.now() + interval_delta).strftime("%Y-%m-%dT%H:%M:%S")
 
-        cur.execute("""
-        UPDATE scheduled_stickers
-        SET status = 'active', scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """, (next_time_str, sticker_id))
-        conn.commit()
-        conn.close()
-
-        # Send first sticker immediately upon activation
-        try:
-            send_now(sticker_id)
-        except Exception:
-            pass
-
-        return {
-            "success": True,
-            "status": "active",
-            "message": f"Sticker activated! First sticker sent now; next will send in {interval}."
-        }
+        db["scheduled_stickers"].update_one(
+            {"id": sticker_id},
+            {"$set": {"status": "active", "scheduled_time": next_time_str, "updated_at": now_iso}}
+        )
     else:
-        cur.execute("""
-        UPDATE scheduled_stickers
-        SET status = 'paused', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """, (sticker_id,))
-        conn.commit()
-        conn.close()
-        return {"success": True, "status": "paused", "message": "Sticker paused"}
+        db["scheduled_stickers"].update_one(
+            {"id": sticker_id},
+            {"$set": {"status": new_status, "updated_at": now_iso}}
+        )
+
+    return {"success": True, "status": new_status}
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
@@ -595,11 +499,11 @@ if __name__ == "__main__":
         if cmd == "--list":
             print(json.dumps(list_all()))
         elif cmd == "--add":
-            raw_input = sys.argv[2] if len(sys.argv) > 2 else sys.stdin.read()
-            print(json.dumps(add_sticker(json.loads(raw_input))))
+            raw = sys.argv[2] if len(sys.argv) > 2 else sys.stdin.read()
+            print(json.dumps(add_sticker(json.loads(raw))))
         elif cmd == "--edit" and len(sys.argv) > 2:
-            raw_input = sys.argv[3] if len(sys.argv) > 3 else sys.stdin.read()
-            print(json.dumps(edit_sticker(int(sys.argv[2]), json.loads(raw_input))))
+            raw = sys.argv[3] if len(sys.argv) > 3 else sys.stdin.read()
+            print(json.dumps(edit_sticker(int(sys.argv[2]), json.loads(raw))))
         elif cmd == "--delete" and len(sys.argv) > 2:
             print(json.dumps(delete_sticker(int(sys.argv[2]))))
         elif cmd == "--toggle" and len(sys.argv) > 3:

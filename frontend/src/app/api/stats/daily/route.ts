@@ -10,7 +10,7 @@ export async function GET() {
     const timing = calculateMidnightTiming();
     return NextResponse.json(
       {
-        databaseEngine: 'PostgreSQL Ready',
+        databaseEngine: 'MongoDB Atlas Active',
         postgresConnected: false,
         today: {
           stat_date: timing.todayStr,

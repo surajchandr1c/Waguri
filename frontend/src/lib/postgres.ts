@@ -130,7 +130,7 @@ function fetchSqliteDailyStats() {
     if (fs.existsSync(/*turbopackIgnore: true*/ script)) {
       try {
         const stdout = execSync(`python "${script}"`, {
-          timeout: 4000,
+          timeout: 15000,
           encoding: 'utf-8',
           windowsHide: true,
         });
@@ -273,7 +273,7 @@ export async function getDailyStatsService() {
   }));
 
   return {
-    databaseEngine: 'PostgreSQL Ready (SQLite Storage Active)',
+    databaseEngine: 'MongoDB Atlas Active',
     postgresConnected: false,
     today,
     history24h: history24h.length > 0 ? history24h : [

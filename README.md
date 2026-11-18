@@ -206,6 +206,53 @@ Moderation Controls:
 - **Media Restrictions:** Per-group toggle for photos, videos, documents, stickers, GIFs/animations, voice notes, and video notes.
 - **Emergency Raid Mode:** `/raid on` enables high-alert lockdown mode; `/raid off` restores normal moderation.
 
+### 5. Advanced Abuse Detection & Auto-Moderation System ("Abuse")
+
+Waguri includes an advanced, multi-layer **Abuse Detection & Auto-Moderation System** specifically engineered to detect, remove, and penalize inappropriate messages, threats, sexual harassment, and deliberate filter bypasses in real-time.
+
+#### Detection Coverage:
+- **Sexual Abuse & Assault Terms:** Non-consensual sexual references, assault threats, coercion, and degradation.
+- **Sexual Harassment:** Unsolicited requests ("send nudes", "show boobs"), predatory propositions, and objectification.
+- **Sexual Vulgarity:** Vulgar sexual anatomy and acts across English, Hindi, and Hinglish.
+- **Physical Assault & Violent Threats:** Death threats ("kill yourself", "i will kill you", "jaan se marunga"), acid threats, stabbing, and severe bodily harm.
+- **Molestation & Groping:** Unwanted touch, molestation terms, and eve-teasing terminology.
+- **Rape-Related Harassment:** Non-consensual coercion, rape threats, and gang-rape references.
+- **Child Sexual Exploitation (CSAM):** Pedophilia and underage exploitation terminology (scored 100 with immediate maximum enforcement).
+- **Targeted Personal Insults:** Slurs aimed at individuals, character assassination, and family degradation.
+- **Multilingual Support:** English, Roman Hindi (`madarchod`, `bhenchod`, `chutiya`, `randi`), Devanagari Hindi (`मादरचोद`, `बहनचोद`, `चूतिया`), and hybrid Hinglish compounds.
+
+#### Bypass Detection Capabilities:
+- **Special Character Insertion:** Detects tokens like `f.u.c.k`, `f*u*c*k`, `f@ck`, `f#ck`, `f!ck`, `f_ck`, `f-ck`.
+- **Space Insertion:** Detects spaced-out sequences like `f u c k`, `m a d a r c h o d`, `b h o s d i k e`.
+- **Leetspeak & Symbol Substitution:** Translates `@` $\to$ `a`, `4` $\to$ `a`, `3` $\to$ `e`, `1` $\to$ `i`, `0` $\to$ `o`, `5` $\to$ `s`, `$` $\to$ `s`, `7` $\to$ `t`.
+- **Unicode Homoglyphs & Lookalikes:** Converts visually deceptive Cyrillic, Greek, and mathematical lookalikes into Latin characters.
+- **Zero-Width & Invisible Characters:** Strips zero-width spaces (`\u200B`), non-joiners (`\u200C`), joiners (`\u200D`), and Zalgo combining marks.
+- **Repeated Characters:** Reduces sequences like `fuuuuuck`, `shiiiiit`, `bhosssssdike` to standard base forms.
+- **Controlled Fuzzy Matching:** Damerau-Levenshtein distance matching for tokens $\ge 6$ chars (e.g. `chutiyaa` $\to$ `chutiya`, `madarchot` $\to$ `madarchod`) without generating false positives on ordinary words.
+- **Context-Aware Exemptions:** Automatically distinguishes legitimate reporting, education, and anti-abuse awareness campaigns while rejecting exemptions when direct second-person attacks are present.
+
+#### Progressive Warning & Mute Sequence:
+1. **Violation 1:** Message Deleted + Warning 1/3 (Auto-deletes notice after 10s).
+2. **Violation 2:** Message Deleted + Warning 2/3 (Auto-deletes notice after 10s).
+3. **Violation 3:** Message Deleted + Warning 3/3 (Auto-deletes notice after 10s).
+4. **Violation 4:** Message Deleted + **30-Minute Temporary Mute**.
+5. **Violation 5:** Message Deleted + **2-Hour Temporary Mute**.
+6. **Violation 6+:** Message Deleted + **24-Hour Temporary Mute**.
+- **Auto-Expiry:** Warnings automatically expire after configurable hours (default 24h).
+- **Audit Trail:** Every moderation event is recorded in MongoDB (`chat_moderation_logs`).
+
+#### Administrator Commands (`/abuse`):
+- `/abuse on` – Enable Abuse detection in current group.
+- `/abuse off` – Disable Abuse detection.
+- `/abuse status` – Display status, thresholds, and statistics.
+- `/abuse words` – List custom blocked and whitelisted keywords.
+- `/abuse addword <word>` – Add custom blocked keyword.
+- `/abuse removeword <word>` – Remove custom keyword.
+- `/abuse warnings [@user|id]` – Check active abuse warnings for a member.
+- `/abuse reset [@user|id]` – Reset warnings for a member.
+- `/abuse settings` – View sensitivity, warning limits, and mute duration.
+- `/abuse logs` – View recent Abuse moderation audit logs.
+
 ---
 
 ## Bot Commands & Help (`/help`)
@@ -243,6 +290,7 @@ General Commands:
 • /antibiolink [on|off] - Toggle bio link protection
 • /cleanservice [on|off] - Clean service messages (joins, leaves, pins)
 • /antispam [on|off] - Toggle repeated-message spam detection
+• /abuse [on|off|status|words|addword|removeword|warnings|reset|settings|logs] - Advanced Abuse Detection & Auto-Moderation System
 
 🛡️ Group Chat (GC) Messaging Controls (Admin Only):
 • /setgcmsg <text> - Set custom GC greeting reply message

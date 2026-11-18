@@ -71,6 +71,11 @@ FEATURE_MAP = {
     # Raid Mode
     "raid": ("raid_mode_enabled", "Emergency Raid Mode"),
     "raid_mode": ("raid_mode_enabled", "Emergency Raid Mode"),
+    # Abuse Detection & Auto-Moderation System
+    "abuse": ("abuse_detection_enabled", "Abuse Detection"),
+    "abuse_detection": ("abuse_detection_enabled", "Abuse Detection"),
+    "antiabuse": ("abuse_detection_enabled", "Abuse Detection"),
+    "anti-abuse": ("abuse_detection_enabled", "Abuse Detection"),
 }
 
 

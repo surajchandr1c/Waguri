@@ -21,6 +21,7 @@ from config import (
 from database import init_db
 from handlers import (
     about_command,
+    abuse_command,
     antibiolink_command,
     antispam_command,
     antlink_command,
@@ -42,6 +43,7 @@ from handlers import (
     exclude_user_command,
     features_command,
     greeting_command,
+    handle_abuse_message,
     handle_anti_forward,
     handle_anti_spam,
     handle_business_connection,
@@ -111,6 +113,7 @@ __all__ = [
     "antibiolink_command",
     "cleanservice_command",
     "antispam_command",
+    "abuse_command",
     "warnings_command",
     "resetwarnings_command",
     "mute_command",
@@ -123,6 +126,7 @@ __all__ = [
     "owner_command",
     "id_command",
     "handle_group_message",
+    "handle_abuse_message",
     "handle_channel_post",
     "handle_my_chat_member",
     "handle_media_restrictions",
@@ -170,7 +174,7 @@ def main() -> None:
     token = get_bot_token()
     logger.info("Bot token verified and loaded successfully.")
 
-    # Initialize SQLite database for persistent multi-tenant moderation records & group settings
+    # Initialize MongoDB database for persistent multi-tenant moderation records & group settings
     try:
         init_db()
     except Exception as exc:

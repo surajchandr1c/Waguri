@@ -1,7 +1,6 @@
 import os
 import sys
 import json
-import sqlite3
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -10,57 +9,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-def get_db_path():
-    candidates = [
-        os.path.join(os.path.dirname(__file__), "moderation.db"),
-        os.path.join(os.getcwd(), "moderation.db"),
-        os.path.join(os.getcwd(), "..", "moderation.db"),
-        r"c:\Users\Suraj\Desktop\New folder\bot\moderation.db",
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return os.path.abspath(c)
-    return "moderation.db"
+from database import get_db, get_next_sequence, get_db_path
 
 def get_bot_token():
     return os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
 
 def init_tables():
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS scheduled_promotions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        message TEXT NOT NULL,
-        link_url TEXT,
-        button_text TEXT DEFAULT 'Visit Website',
-        target_type TEXT DEFAULT 'all_gc',
-        target_chat_ids TEXT,
-        schedule_type TEXT DEFAULT 'once',
-        scheduled_time TEXT NOT NULL,
-        repeat_interval TEXT DEFAULT 'none',
-        status TEXT DEFAULT 'active',
-        total_delivered INTEGER DEFAULT 0,
-        last_sent_at TEXT,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )
-    """)
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS promotion_send_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        promotion_id INTEGER,
-        chat_id INTEGER NOT NULL,
-        chat_title TEXT NOT NULL,
-        sent_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        status TEXT DEFAULT 'success',
-        details TEXT
-    )
-    """)
-    conn.commit()
-    conn.close()
+    db = get_db()
+    db["scheduled_promotions"].create_index("id", unique=True)
+    db["scheduled_promotions"].create_index("status")
+    db["promotion_send_logs"].create_index("id", unique=True)
+    db["promotion_send_logs"].create_index("promotion_id")
 
 def send_telegram_message(chat_id: int, text: str, link_url: str = None, button_text: str = None) -> dict:
     token = get_bot_token()
@@ -105,36 +64,29 @@ def send_telegram_message(chat_id: int, text: str, link_url: str = None, button_
         return {"ok": False, "error": str(e)}
 
 def get_active_group_chats():
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT chat_id, chat_title, chat_type FROM chats WHERE is_active = 1 AND chat_type IN ('group', 'supergroup') ORDER BY chat_title ASC")
-    chats = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return chats
+    db = get_db()
+    cursor = db["chats"].find(
+        {"is_active": 1, "chat_type": {"$in": ["group", "supergroup"]}},
+        {"_id": 0, "chat_id": 1, "chat_title": 1, "chat_type": 1}
+    ).sort("chat_title", 1)
+    return list(cursor)
 
 def broadcast_promotion(promotion_id: int) -> dict:
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM scheduled_promotions WHERE id = ? LIMIT 1", (promotion_id,))
-    item = cur.fetchone()
+    db = get_db()
+    item = db["scheduled_promotions"].find_one({"id": promotion_id})
     if not item:
-        conn.close()
         return {"success": False, "error": "Promotion not found"}
 
-    item = dict(item)
+    item.pop("_id", None)
     all_gcs = get_active_group_chats()
 
     # Determine target GCs
     targets = []
     if item.get("target_type") == "selected" and item.get("target_chat_ids"):
         try:
-            selected_ids = json.loads(item["target_chat_ids"])
+            raw_ids = item["target_chat_ids"]
+            selected_ids = json.loads(raw_ids) if isinstance(raw_ids, str) else raw_ids
             targets = [g for g in all_gcs if g["chat_id"] in selected_ids]
         except Exception:
             targets = all_gcs
@@ -143,8 +95,8 @@ def broadcast_promotion(promotion_id: int) -> dict:
 
     if not targets:
         # Fallback to any active chats
-        cur.execute("SELECT chat_id, chat_title, chat_type FROM chats WHERE is_active = 1 LIMIT 5")
-        targets = [dict(r) for r in cur.fetchall()]
+        cursor = db["chats"].find({"is_active": 1}, {"_id": 0, "chat_id": 1, "chat_title": 1, "chat_type": 1}).limit(5)
+        targets = list(cursor)
 
     now_iso = datetime.now().isoformat()
     success_count = 0
@@ -153,7 +105,7 @@ def broadcast_promotion(promotion_id: int) -> dict:
 
     for gc in targets:
         chat_id = gc["chat_id"]
-        chat_title = gc["chat_title"]
+        chat_title = gc.get("chat_title") or f"Chat {chat_id}"
 
         res = send_telegram_message(
             chat_id=chat_id,
@@ -171,10 +123,16 @@ def broadcast_promotion(promotion_id: int) -> dict:
         else:
             fail_count += 1
 
-        cur.execute("""
-        INSERT INTO promotion_send_logs (promotion_id, chat_id, chat_title, sent_at, status, details)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """, (promotion_id, chat_id, chat_title, now_iso, status, details))
+        log_id = get_next_sequence("promotion_send_logs", db=db)
+        db["promotion_send_logs"].insert_one({
+            "id": log_id,
+            "promotion_id": promotion_id,
+            "chat_id": chat_id,
+            "chat_title": chat_title,
+            "sent_at": now_iso,
+            "status": status,
+            "details": details,
+        })
 
         results.append({
             "chat_id": chat_id,
@@ -185,14 +143,16 @@ def broadcast_promotion(promotion_id: int) -> dict:
 
     # Update promotion metadata
     new_total = (item.get("total_delivered") or 0) + success_count
-    cur.execute("""
-    UPDATE scheduled_promotions
-    SET last_sent_at = ?, total_delivered = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-    """, (now_iso, new_total, promotion_id))
-
-    conn.commit()
-    conn.close()
+    db["scheduled_promotions"].update_one(
+        {"id": promotion_id},
+        {
+            "$set": {
+                "last_sent_at": now_iso,
+                "total_delivered": new_total,
+                "updated_at": now_iso,
+            }
+        }
+    )
 
     return {
         "success": True,
@@ -271,14 +231,13 @@ def compute_next_datetime(base_dt_str: str, interval_str: str) -> str:
 
 def process_due_promotions():
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM scheduled_promotions WHERE status = 'active'")
-    active_items = [dict(r) for r in cur.fetchall()]
-    conn.close()
+    db = get_db()
+    cursor = db["scheduled_promotions"].find({"status": "active"})
+    active_items = []
+    for doc in cursor:
+        d = dict(doc)
+        d.pop("_id", None)
+        active_items.append(d)
 
     now = datetime.now()
     results = []
@@ -304,25 +263,17 @@ def process_due_promotions():
         results.append({"id": item["id"], "result": res})
 
         # Recurrence handling
-        conn = sqlite3.connect(db_path)
-        cur = conn.cursor()
-
         if item.get("schedule_type") == "recurring":
             next_time_str = (datetime.now() + interval_delta).strftime("%Y-%m-%dT%H:%M:%S")
-            cur.execute("""
-            UPDATE scheduled_promotions
-            SET scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """, (next_time_str, item["id"]))
+            db["scheduled_promotions"].update_one(
+                {"id": item["id"]},
+                {"$set": {"scheduled_time": next_time_str, "updated_at": datetime.now().isoformat()}}
+            )
         else:
-            cur.execute("""
-            UPDATE scheduled_promotions
-            SET status = 'completed', updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """, (item["id"],))
-
-        conn.commit()
-        conn.close()
+            db["scheduled_promotions"].update_one(
+                {"id": item["id"]},
+                {"$set": {"status": "completed", "updated_at": datetime.now().isoformat()}}
+            )
 
     return results
 
@@ -330,39 +281,40 @@ def list_all():
     init_tables()
     try:
         process_due_promotions()
-    except Exception as e:
+    except Exception:
         pass
 
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    db = get_db()
+    promotions = []
+    for doc in db["scheduled_promotions"].find().sort("id", -1):
+        d = dict(doc)
+        d.pop("_id", None)
+        promotions.append(d)
 
-    cur.execute("SELECT * FROM scheduled_promotions ORDER BY id DESC")
-    promotions = [dict(r) for r in cur.fetchall()]
-
-    cur.execute("SELECT * FROM promotion_send_logs ORDER BY id DESC LIMIT 50")
-    logs = [dict(r) for r in cur.fetchall()]
+    logs = []
+    for doc in db["promotion_send_logs"].find().sort("id", -1).limit(50):
+        d = dict(doc)
+        d.pop("_id", None)
+        logs.append(d)
 
     # Available Group Chats
-    cur.execute("SELECT chat_id, chat_title, chat_type FROM chats WHERE is_active = 1 ORDER BY chat_title ASC")
-    chats = [dict(r) for r in cur.fetchall()]
-
-    conn.close()
+    chats = []
+    for doc in db["chats"].find({"is_active": 1}).sort("chat_title", 1):
+        d = dict(doc)
+        d.pop("_id", None)
+        chats.append(d)
 
     return {
         "promotions": promotions,
         "logs": logs,
         "chats": chats,
-        "total_gcs": len([c for c in chats if c["chat_type"] in ("group", "supergroup")]),
+        "total_gcs": len([c for c in chats if c.get("chat_type") in ("group", "supergroup")]),
         "server_time": datetime.now().isoformat(),
     }
 
 def add_promotion(data: dict):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
+    db = get_db()
 
     title = data.get("title", "").strip() or "GC Promotional Announcement"
     message = data.get("message", "").strip()
@@ -374,47 +326,51 @@ def add_promotion(data: dict):
     scheduled_time = data.get("scheduled_time", "").strip() or datetime.now().strftime("%Y-%m-%dT%H:%M")
     repeat_interval = data.get("repeat_interval", "none")
 
-    cur.execute("""
-    INSERT INTO scheduled_promotions (title, message, link_url, button_text, target_type, target_chat_ids, schedule_type, scheduled_time, repeat_interval, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
-    """, (title, message, link_url, button_text, target_type, target_chat_ids, schedule_type, scheduled_time, repeat_interval))
+    new_id = get_next_sequence("scheduled_promotions", db=db)
+    now_iso = datetime.now().isoformat()
 
-    new_id = cur.lastrowid
-    conn.commit()
-    conn.close()
+    db["scheduled_promotions"].insert_one({
+        "id": new_id,
+        "title": title,
+        "message": message,
+        "link_url": link_url,
+        "button_text": button_text,
+        "target_type": target_type,
+        "target_chat_ids": target_chat_ids,
+        "schedule_type": schedule_type,
+        "scheduled_time": scheduled_time,
+        "repeat_interval": repeat_interval,
+        "status": "active",
+        "total_delivered": 0,
+        "last_sent_at": None,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    })
 
     return {"success": True, "id": new_id, "message": "Promotional broadcast scheduled successfully"}
 
 def delete_promotion(promotion_id: int):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM scheduled_promotions WHERE id = ?", (promotion_id,))
-    cur.execute("DELETE FROM promotion_send_logs WHERE promotion_id = ?", (promotion_id,))
-    conn.commit()
-    conn.close()
+    db = get_db()
+    db["scheduled_promotions"].delete_one({"id": promotion_id})
+    db["promotion_send_logs"].delete_many({"promotion_id": promotion_id})
     return {"success": True, "message": f"Deleted promotion {promotion_id}"}
 
 def toggle_status(promotion_id: int, new_status: str):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute("UPDATE scheduled_promotions SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_status, promotion_id))
-    conn.commit()
-    conn.close()
+    db = get_db()
+    now_iso = datetime.now().isoformat()
+    db["scheduled_promotions"].update_one(
+        {"id": promotion_id},
+        {"$set": {"status": new_status, "updated_at": now_iso}}
+    )
     return {"success": True, "status": new_status}
 
 def edit_promotion(promotion_id: int, data: dict):
     init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-
-    cur.execute("SELECT id FROM scheduled_promotions WHERE id = ?", (promotion_id,))
-    if not cur.fetchone():
-        conn.close()
+    db = get_db()
+    existing = db["scheduled_promotions"].find_one({"id": promotion_id})
+    if not existing:
         return {"success": False, "error": f"Promotion #{promotion_id} not found"}
 
     title = data.get("title", "").strip() or "GC Promotional Announcement"
@@ -427,16 +383,27 @@ def edit_promotion(promotion_id: int, data: dict):
     scheduled_time = data.get("scheduled_time", "").strip() or datetime.now().strftime("%Y-%m-%dT%H:%M")
     repeat_interval = data.get("repeat_interval", "none")
     status = data.get("status", "active")
+    now_iso = datetime.now().isoformat()
 
-    cur.execute("""
-    UPDATE scheduled_promotions
-    SET title = ?, message = ?, link_url = ?, button_text = ?, target_type = ?,
-        target_chat_ids = ?, schedule_type = ?, scheduled_time = ?, repeat_interval = ?, status = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-    """, (title, message, link_url, button_text, target_type, target_chat_ids, schedule_type, scheduled_time, repeat_interval, status, promotion_id))
+    db["scheduled_promotions"].update_one(
+        {"id": promotion_id},
+        {
+            "$set": {
+                "title": title,
+                "message": message,
+                "link_url": link_url,
+                "button_text": button_text,
+                "target_type": target_type,
+                "target_chat_ids": target_chat_ids,
+                "schedule_type": schedule_type,
+                "scheduled_time": scheduled_time,
+                "repeat_interval": repeat_interval,
+                "status": status,
+                "updated_at": now_iso,
+            }
+        }
+    )
 
-    conn.commit()
-    conn.close()
     return {"success": True, "id": promotion_id, "message": "Promotion updated successfully"}
 
 if __name__ == "__main__":

@@ -137,6 +137,7 @@ flowchart TD
 | **Anti-Link Filtering** | Regex pattern matching for standard URLs, Telegram invite links (`t.me/+`, `telegram.me`), and usernames against per-group domain whitelists and blacklists. |
 | **Service Message Cleaner** | Automatic detection and deletion of system service messages (`new_chat_members`, `left_chat_member`, `pinned_message`). |
 | **Emergency Raid Mode** | Automated rate-limiting of join events within rolling time windows; temporary mass-restricting of incoming accounts during bot raids. |
+| **Abuse Detection & Auto-Moderation Engine** | Multi-layer NLP & normalization pipeline (`moderation.abuse`): Unicode NFKC canonicalization, zero-width stripping, Cyrillic/Greek homoglyph substitution, repeated character reduction, leetspeak conversion, space & punctuation intra-word collapse, and Devanagari transliteration. Features 12 categorized dictionaries (sexual abuse, harassment, vulgarity, assault, rape, CSAM, Hindi, Hinglish, threats, insults), compiled regex phrase detectors, controlled Damerau-Levenshtein fuzzy matching ($\ge 6$ chars), context-aware safe-educational exemptions, and escalating 30m/2h/24h temporary mutes with auto-expiring warnings. |
 
 ---
 

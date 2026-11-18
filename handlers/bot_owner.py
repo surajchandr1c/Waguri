@@ -121,7 +121,7 @@ async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     biz_stats = get_global_business_stats()
     uptime_str = format_uptime(time.time() - getattr(config, "BOT_START_TIME", time.time()))
     db_file = get_db_path()
-    db_size_kb = os.path.getsize(db_file) // 1024 if os.path.exists(db_file) else 0
+    db_size_str = f" ({os.path.getsize(db_file) // 1024} KB)" if os.path.exists(db_file) else " (Cloud Atlas)"
 
     overrides_text = ", ".join(f"{k}={v}" for k, v in config.GLOBAL_EMERGENCY_OVERRIDES.items()) or "None"
 
@@ -129,7 +129,7 @@ async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "👑 <b>Waguri Super-Admin Owner Dashboard</b>\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"⏱ <b>Bot Uptime:</b> {uptime_str}\n"
-        f"💾 <b>Database:</b> <code>{db_file}</code> ({db_size_kb} KB)\n"
+        f"💾 <b>Database:</b> <code>{db_file}</code>{db_size_str}\n"
         f"🚨 <b>Emergency Overrides:</b> <code>{overrides_text}</code>\n\n"
         "🌐 <b>Platform Scale:</b>\n"
         f"• Active Groups: <b>{stats['active_groups']}</b>\n"

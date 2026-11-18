@@ -1,534 +1,131 @@
 import json
 import logging
-import sqlite3
+import os
 import time
 from typing import Any
+from pymongo import MongoClient, ASCENDING, DESCENDING, ReturnDocument
+from pymongo.errors import DuplicateKeyError
 import config
 
 logger = logging.getLogger("Waguri.Database")
 
+# =============================================================================
+# MongoDB Connection & Client Management
+# =============================================================================
+
+_mongo_client: MongoClient | None = None
+
 
 def get_db_path() -> str:
-    """Retrieve the current database path dynamically from configuration."""
-    return getattr(config, "DATABASE_PATH", "moderation.db")
+    """Retrieve the current database description dynamically from configuration."""
+    db_name = getattr(config, "MONGODB_DB_NAME", "waguri_db")
+    return f"MongoDB Atlas ({db_name})"
 
 
-def get_connection(db_path: str | None = None) -> sqlite3.Connection:
-    """Create a SQLite database connection with row factory and WAL mode configured."""
-    path = db_path or get_db_path()
-    conn = sqlite3.connect(path, timeout=15.0)
-    conn.row_factory = sqlite3.Row
-    # Enable WAL mode for high concurrency
-    try:
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA foreign_keys = ON")
-    except Exception:
-        pass
-    return conn
+def get_client() -> MongoClient:
+    """Retrieve or initialize the thread-safe singleton MongoDB client."""
+    global _mongo_client
+    if _mongo_client is None:
+        uri = (
+            getattr(config, "MONGODB_URI", None)
+            or os.getenv("MONGODB_URI")
+            or os.getenv("MONGO_URI")
+            or "mongodb+srv://sunbaby7319_db_user:HePIfODpTWKlxrhs@waguri.y7u511m.mongodb.net/waguri_db?retryWrites=true&w=majority"
+        )
+        _mongo_client = MongoClient(uri, serverSelectionTimeoutMS=10000)
+    return _mongo_client
+
+
+def get_db(db_name: str | None = None):
+    """Retrieve the active MongoDB database instance."""
+    client = get_client()
+    target_name = db_name or getattr(config, "MONGODB_DB_NAME", None) or os.getenv("MONGODB_DB_NAME", "waguri_db")
+    return client[target_name]
+
+
+def get_connection(db_path: str | None = None):
+    """Compatibility helper returning the active MongoDB database instance."""
+    return get_db()
+
+
+def get_next_sequence(sequence_name: str, db=None) -> int:
+    """Generate an atomic sequential integer ID for collections needing incrementing IDs."""
+    target_db = db if db is not None else get_db()
+    ret = target_db["counters"].find_one_and_update(
+        {"_id": sequence_name},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return int(ret["seq"])
 
 
 def init_db(db_path: str | None = None) -> None:
     """
-    Initialize and safely migrate the SQLite database to the 13-table multi-tenant architecture.
-    Guarantees that no existing data or settings are overwritten or lost.
+    Initialize MongoDB database collections, schema indices, and verify connectivity.
+    Ensures optimal multi-tenant performance and atomic conflict resolution.
     """
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
+    db = get_db()
+    # Ping database to verify connection
+    db.command("ping")
 
-        # 1. Registered Chats Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chats (
-                chat_id INTEGER PRIMARY KEY,
-                chat_title TEXT,
-                chat_type TEXT NOT NULL,
-                added_at REAL NOT NULL,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                updated_at REAL NOT NULL
-            )
-            """
-        )
+    # 1. Chats collection
+    db["chats"].create_index([("chat_id", ASCENDING)], unique=True)
+    db["chats"].create_index([("is_active", ASCENDING), ("chat_type", ASCENDING)])
 
-        # 2. Chat Settings Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_settings (
-                chat_id INTEGER PRIMARY KEY,
-                anti_link_enabled INTEGER NOT NULL DEFAULT 1,
-                anti_bio_link_enabled INTEGER NOT NULL DEFAULT 1,
-                clean_service_enabled INTEGER NOT NULL DEFAULT 1,
-                anti_spam_enabled INTEGER NOT NULL DEFAULT 1,
-                flood_detection_enabled INTEGER NOT NULL DEFAULT 1,
-                flood_threshold_messages INTEGER NOT NULL DEFAULT 8,
-                flood_window_seconds INTEGER NOT NULL DEFAULT 10,
-                warning_system_enabled INTEGER NOT NULL DEFAULT 1,
-                auto_restrict_enabled INTEGER NOT NULL DEFAULT 1,
-                anti_forward_enabled INTEGER NOT NULL DEFAULT 0,
-                anti_join_spam_enabled INTEGER NOT NULL DEFAULT 0,
-                anti_bot_enabled INTEGER NOT NULL DEFAULT 0,
-                media_restrictions_enabled INTEGER NOT NULL DEFAULT 0,
-                allowed_media_types TEXT NOT NULL DEFAULT '{"photos":1,"videos":1,"documents":1,"stickers":1,"gifs":1,"voice":1,"video_notes":1}',
-                spam_window_seconds INTEGER NOT NULL DEFAULT 30,
-                warning_limit INTEGER NOT NULL DEFAULT 2,
-                restriction_duration_seconds INTEGER NOT NULL DEFAULT 86400,
-                warning_delete_after_seconds INTEGER NOT NULL DEFAULT 10,
-                custom_warning_msg_1 TEXT,
-                custom_warning_msg_2 TEXT,
-                raid_mode_enabled INTEGER NOT NULL DEFAULT 0,
-                updated_at REAL NOT NULL,
-                FOREIGN KEY (chat_id) REFERENCES chats (chat_id) ON DELETE CASCADE
-            )
-            """
-        )
+    # 2. Chat Settings collection
+    db["chat_settings"].create_index([("chat_id", ASCENDING)], unique=True)
 
-        # 3. Chat Admins Table (Role-based access mapping)
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_admins (
-                chat_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                role TEXT NOT NULL DEFAULT 'admin',
-                can_change_settings INTEGER NOT NULL DEFAULT 1,
-                updated_at REAL NOT NULL,
-                PRIMARY KEY (chat_id, user_id)
-            )
-            """
-        )
+    # 3. Chat Admins collection
+    db["chat_admins"].create_index([("chat_id", ASCENDING), ("user_id", ASCENDING)], unique=True)
 
-        # 4. Chat Moderation Audit Logs Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_moderation_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                action TEXT NOT NULL,
-                details TEXT NOT NULL,
-                timestamp REAL NOT NULL
-            )
-            """
-        )
+    # 4. Moderation Logs collection
+    db["chat_moderation_logs"].create_index([("chat_id", ASCENDING), ("timestamp", DESCENDING)])
 
-        # 5. Chat Warnings Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_warnings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                warning_number INTEGER NOT NULL,
-                reason TEXT NOT NULL,
-                issued_at REAL NOT NULL
-            )
-            """
-        )
+    # 5. Warnings collection
+    db["chat_warnings"].create_index([("chat_id", ASCENDING), ("user_id", ASCENDING)])
 
-        # 6. Chat Spam Incidents Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_spam_incidents (
-                chat_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                message_fingerprint TEXT NOT NULL,
-                count INTEGER NOT NULL,
-                last_message_time REAL NOT NULL,
-                message_ids TEXT NOT NULL,
-                PRIMARY KEY (chat_id, user_id)
-            )
-            """
-        )
+    # 6. Spam Incidents collection
+    db["chat_spam_incidents"].create_index([("chat_id", ASCENDING), ("user_id", ASCENDING)], unique=True)
 
-        # 7. Chat Spam Messages Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_spam_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                timestamp REAL NOT NULL
-            )
-            """
-        )
+    # 7. Spam Messages collection
+    db["chat_spam_messages"].create_index([("chat_id", ASCENDING), ("user_id", ASCENDING)])
 
-        # 8. Chat Link Whitelist Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_link_whitelist (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                domain TEXT NOT NULL,
-                added_by INTEGER NOT NULL DEFAULT 0,
-                added_at REAL NOT NULL,
-                UNIQUE (chat_id, domain)
-            )
-            """
-        )
+    # 8. Link Whitelist collection
+    db["chat_link_whitelist"].create_index([("chat_id", ASCENDING), ("domain", ASCENDING)], unique=True)
 
-        # 9. Chat Blacklist Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_blacklist (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                pattern_or_domain TEXT NOT NULL,
-                added_by INTEGER NOT NULL DEFAULT 0,
-                added_at REAL NOT NULL,
-                UNIQUE (chat_id, pattern_or_domain)
-            )
-            """
-        )
+    # 9. Blacklist collection
+    db["chat_blacklist"].create_index([("chat_id", ASCENDING), ("pattern_or_domain", ASCENDING)], unique=True)
 
-        # 10. Chat Statistics Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_statistics (
-                chat_id INTEGER PRIMARY KEY,
-                chat_title TEXT,
-                total_messages_checked INTEGER NOT NULL DEFAULT 0,
-                links_deleted INTEGER NOT NULL DEFAULT 0,
-                spam_deleted INTEGER NOT NULL DEFAULT 0,
-                warnings_issued INTEGER NOT NULL DEFAULT 0,
-                restrictions_applied INTEGER NOT NULL DEFAULT 0,
-                banned_members INTEGER NOT NULL DEFAULT 0,
-                forwards_deleted INTEGER NOT NULL DEFAULT 0,
-                media_deleted INTEGER NOT NULL DEFAULT 0,
-                raid_actions_taken INTEGER NOT NULL DEFAULT 0,
-                updated_at REAL NOT NULL
-            )
-            """
-        )
+    # 10. Statistics collection
+    db["chat_statistics"].create_index([("chat_id", ASCENDING)], unique=True)
 
-        # 11. Chat Join Events Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chat_join_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                is_bot INTEGER NOT NULL DEFAULT 0,
-                joined_at REAL NOT NULL
-            )
-            """
-        )
+    # 11. Join Events collection
+    db["chat_join_events"].create_index([("chat_id", ASCENDING), ("joined_at", DESCENDING)])
 
-        # 12. User Restrictions Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_restrictions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                username TEXT,
-                action TEXT NOT NULL DEFAULT 'mute',
-                reason TEXT NOT NULL,
-                previous_permissions TEXT,
-                restricted_at REAL NOT NULL,
-                expires_at REAL NOT NULL,
-                active INTEGER NOT NULL DEFAULT 1
-            )
-            """
-        )
+    # 12. User Restrictions collection
+    db["user_restrictions"].create_index([("chat_id", ASCENDING), ("user_id", ASCENDING), ("active", ASCENDING)])
 
-        # 13. Callback Sessions Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS callback_sessions (
-                session_id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                chat_id INTEGER NOT NULL,
-                data TEXT,
-                created_at REAL NOT NULL,
-                expires_at REAL NOT NULL
-            )
-            """
-        )
+    # 13. Callback Sessions collection
+    db["callback_sessions"].create_index([("session_id", ASCENDING)], unique=True)
 
-        # 14. Telegram Business Connections Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS business_connections (
-                connection_id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                user_chat_id INTEGER NOT NULL,
-                is_enabled INTEGER NOT NULL DEFAULT 1,
-                can_reply INTEGER NOT NULL DEFAULT 1,
-                account_username TEXT,
-                account_first_name TEXT,
-                connected_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            )
-            """
-        )
+    # 14. Telegram Business Connections collection
+    db["business_connections"].create_index([("connection_id", ASCENDING)], unique=True)
+    db["business_connections"].create_index([("user_id", ASCENDING), ("is_enabled", ASCENDING)])
 
-        # 15. Personal Auto-Reply Settings Table (Per-User)
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS personal_reply_settings (
-                user_id INTEGER PRIMARY KEY,
-                is_enabled INTEGER NOT NULL DEFAULT 1,
-                first_time_only INTEGER NOT NULL DEFAULT 1,
-                cooldown_seconds INTEGER NOT NULL DEFAULT 86400,
-                daily_limit INTEGER NOT NULL DEFAULT 100,
-                reply_delay_seconds INTEGER NOT NULL DEFAULT 0,
-                parse_mode TEXT NOT NULL DEFAULT 'HTML',
-                excluded_user_ids TEXT NOT NULL DEFAULT '[]',
-                welcome_message_enabled INTEGER NOT NULL DEFAULT 1,
-                initial_message_set INTEGER NOT NULL DEFAULT 0,
-                updated_at REAL NOT NULL
-            )
-            """
-        )
+    # 15. Personal Auto-Reply Settings collection
+    db["personal_reply_settings"].create_index([("user_id", ASCENDING)], unique=True)
 
-        # 16. Personal Auto-Reply Templates Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS personal_reply_templates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                template_name TEXT NOT NULL DEFAULT 'default',
-                content TEXT NOT NULL,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL,
-                UNIQUE (user_id, template_name)
-            )
-            """
-        )
+    # 16. Personal Auto-Reply Templates collection
+    db["personal_reply_templates"].create_index([("user_id", ASCENDING), ("template_name", ASCENDING)], unique=True)
 
-        # 17. Business First Contacts History Table (First-time sender detection & suppression)
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS business_first_contacts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                business_user_id INTEGER NOT NULL,
-                sender_id INTEGER NOT NULL,
-                sender_username TEXT,
-                sender_first_name TEXT,
-                first_seen_at REAL NOT NULL,
-                last_seen_at REAL NOT NULL,
-                messages_count INTEGER NOT NULL DEFAULT 1,
-                replied INTEGER NOT NULL DEFAULT 0,
-                replied_at REAL,
-                UNIQUE (business_user_id, sender_id)
-            )
-            """
-        )
+    # 17. Business First Contacts collection
+    db["business_first_contacts"].create_index([("business_user_id", ASCENDING), ("sender_id", ASCENDING)], unique=True)
 
-        # 18. Business Reply Delivery Logs Table
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS business_reply_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                business_user_id INTEGER NOT NULL,
-                connection_id TEXT NOT NULL,
-                chat_id INTEGER NOT NULL,
-                sender_id INTEGER NOT NULL,
-                message_id INTEGER NOT NULL,
-                reply_text TEXT,
-                sent_at REAL NOT NULL,
-                status TEXT NOT NULL DEFAULT 'success',
-                error_message TEXT
-            )
-            """
-        )
+    # 18. Business Reply Delivery Logs collection
+    db["business_reply_logs"].create_index([("business_user_id", ASCENDING), ("sent_at", DESCENDING)])
 
-        # Create Indexes for Multi-Tenant & Business Operation Performance
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_chat ON chat_moderation_logs(chat_id, timestamp)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_warnings_chat_user ON chat_warnings(chat_id, user_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_spam_msgs_chat_user ON chat_spam_messages(chat_id, user_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_whitelist_chat ON chat_link_whitelist(chat_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_chat ON chat_blacklist(chat_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_join_events_chat ON chat_join_events(chat_id, joined_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_restrictions_chat_user ON user_restrictions(chat_id, user_id, active)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_biz_conn_user ON business_connections(user_id, is_enabled)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_biz_templates_user ON personal_reply_templates(user_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_biz_contacts_user_sender ON business_first_contacts(business_user_id, sender_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_biz_logs_user_sent ON business_reply_logs(business_user_id, sent_at)")
-
-        # Migration: ensure anti_bio_link_enabled, clean_service_enabled, custom_greeting_msg, greeting_enabled columns exist in chat_settings
-        cursor.execute("PRAGMA table_info(chat_settings)")
-        existing_cols = [r[1] for r in cursor.fetchall()]
-        if "anti_bio_link_enabled" not in existing_cols:
-            cursor.execute("ALTER TABLE chat_settings ADD COLUMN anti_bio_link_enabled INTEGER NOT NULL DEFAULT 1")
-        if "clean_service_enabled" not in existing_cols:
-            cursor.execute("ALTER TABLE chat_settings ADD COLUMN clean_service_enabled INTEGER NOT NULL DEFAULT 1")
-        if "custom_greeting_msg" not in existing_cols:
-            cursor.execute("ALTER TABLE chat_settings ADD COLUMN custom_greeting_msg TEXT DEFAULT NULL")
-        if "greeting_enabled" not in existing_cols:
-            cursor.execute("ALTER TABLE chat_settings ADD COLUMN greeting_enabled INTEGER NOT NULL DEFAULT 1")
-
-        # Migration: ensure initial_message_set exists in personal_reply_settings
-        cursor.execute("PRAGMA table_info(personal_reply_settings)")
-        p_cols = [r[1] for r in cursor.fetchall()]
-        if "initial_message_set" not in p_cols:
-            cursor.execute("ALTER TABLE personal_reply_settings ADD COLUMN initial_message_set INTEGER NOT NULL DEFAULT 0")
-
-        # ---------------------------------------------------------------------
-        # Safe Data Migrations from legacy tables (if present)
-        # ---------------------------------------------------------------------
-        existing_tables = [r[0] for r in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-
-        if "group_settings" in existing_tables:
-            cursor.execute("SELECT * FROM group_settings")
-            rows = cursor.fetchall()
-            for r in rows:
-                d = dict(r)
-                cid = d.get("chat_id")
-                if not cid:
-                    continue
-                # Migrate to chats
-                cursor.execute(
-                    """
-                    INSERT INTO chats (chat_id, chat_title, chat_type, added_at, is_active, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(chat_id) DO UPDATE SET
-                        chat_title = COALESCE(excluded.chat_title, chats.chat_title),
-                        chat_type = COALESCE(excluded.chat_type, chats.chat_type),
-                        is_active = excluded.is_active,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        cid,
-                        d.get("chat_title") or "Group",
-                        d.get("chat_type") or "group",
-                        d.get("added_at") or time.time(),
-                        d.get("is_active", 1),
-                        d.get("updated_at") or time.time(),
-                    ),
-                )
-                # Migrate to chat_settings
-                cursor.execute(
-                    """
-                    INSERT INTO chat_settings (
-                        chat_id, anti_link_enabled, anti_spam_enabled, flood_detection_enabled,
-                        warning_system_enabled, auto_restrict_enabled, spam_window_seconds,
-                        warning_limit, restriction_duration_seconds, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(chat_id) DO UPDATE SET
-                        anti_link_enabled = excluded.anti_link_enabled,
-                        anti_spam_enabled = excluded.anti_spam_enabled,
-                        flood_detection_enabled = excluded.flood_detection_enabled,
-                        warning_system_enabled = excluded.warning_system_enabled,
-                        auto_restrict_enabled = excluded.auto_restrict_enabled,
-                        spam_window_seconds = excluded.spam_window_seconds,
-                        warning_limit = excluded.warning_limit,
-                        restriction_duration_seconds = excluded.restriction_duration_seconds,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        cid,
-                        d.get("anti_link_enabled", 1),
-                        d.get("anti_spam_enabled", 1),
-                        d.get("flood_detection_enabled", 1),
-                        d.get("warning_system_enabled", 1),
-                        d.get("auto_restrict_enabled", 1),
-                        d.get("spam_window_seconds", 30),
-                        d.get("warning_limit", 2),
-                        d.get("restriction_duration_seconds", 86400),
-                        d.get("updated_at") or time.time(),
-                    ),
-                )
-
-        if "group_statistics" in existing_tables:
-            cursor.execute("SELECT * FROM group_statistics")
-            for r in cursor.fetchall():
-                d = dict(r)
-                cursor.execute(
-                    """
-                    INSERT INTO chat_statistics (
-                        chat_id, chat_title, total_messages_checked, links_deleted,
-                        spam_deleted, warnings_issued, restrictions_applied, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(chat_id) DO UPDATE SET
-                        chat_title = COALESCE(excluded.chat_title, chat_statistics.chat_title),
-                        total_messages_checked = excluded.total_messages_checked,
-                        links_deleted = excluded.links_deleted,
-                        spam_deleted = excluded.spam_deleted,
-                        warnings_issued = excluded.warnings_issued,
-                        restrictions_applied = excluded.restrictions_applied,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        d["chat_id"],
-                        d.get("chat_title"),
-                        d.get("total_messages_checked", 0),
-                        d.get("links_deleted", 0),
-                        d.get("spam_deleted", 0),
-                        d.get("warnings_issued", 0),
-                        d.get("restrictions_applied", 0),
-                        d.get("updated_at", 0),
-                    ),
-                )
-
-        if "active_spam_incidents" in existing_tables:
-            cursor.execute("SELECT * FROM active_spam_incidents")
-            for r in cursor.fetchall():
-                d = dict(r)
-                cursor.execute(
-                    """
-                    INSERT INTO chat_spam_incidents (
-                        chat_id, user_id, message_fingerprint, count, last_message_time, message_ids
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(chat_id, user_id) DO UPDATE SET
-                        message_fingerprint = excluded.message_fingerprint,
-                        count = excluded.count,
-                        last_message_time = excluded.last_message_time,
-                        message_ids = excluded.message_ids
-                    """,
-                    (
-                        d["chat_id"],
-                        d["user_id"],
-                        d["message_fingerprint"],
-                        d["count"],
-                        d["last_message_time"],
-                        d.get("message_ids", "[]"),
-                    ),
-                )
-
-        if "restriction_history" in existing_tables:
-            cursor.execute("SELECT * FROM restriction_history")
-            for r in cursor.fetchall():
-                d = dict(r)
-                cursor.execute(
-                    """
-                    INSERT INTO user_restrictions (
-                        chat_id, user_id, username, action, reason, restricted_at, expires_at, active
-                    ) VALUES (?, ?, ?, 'mute', ?, ?, ?, ?)
-                    """,
-                    (
-                        d["chat_id"],
-                        d["user_id"],
-                        d.get("username"),
-                        d.get("reason", "Violation"),
-                        d.get("restricted_at", 0),
-                        d.get("expires_at", 0),
-                        d.get("active", 1),
-                    ),
-                )
-
-        if "moderation_logs" in existing_tables:
-            cursor.execute("SELECT * FROM moderation_logs")
-            for r in cursor.fetchall():
-                d = dict(r)
-                cursor.execute(
-                    """
-                    INSERT INTO chat_moderation_logs (
-                        chat_id, user_id, action, details, timestamp
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (
-                        d["chat_id"],
-                        d["user_id"],
-                        d["action"],
-                        d["details"],
-                        d["timestamp"],
-                    ),
-                )
-
-        conn.commit()
-    logger.info("Database initialized and verified for multi-tenant operation at '%s'.", path)
+    logger.info("MongoDB database initialized and verified for multi-tenant operation at '%s'.", get_db_path())
 
 
 # =============================================================================
@@ -543,80 +140,74 @@ def register_or_update_chat(
     db_path: str | None = None,
 ) -> None:
     """Register a new group/channel or update its active state upon join or message."""
-    path = db_path or get_db_path()
+    db = get_db()
     now = time.time()
     active_int = 1 if is_active else 0
     c_type = chat_type or "group"
     c_title = chat_title or "Chat"
 
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO chats (chat_id, chat_title, chat_type, added_at, is_active, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(chat_id) DO UPDATE SET
-                chat_title = COALESCE(excluded.chat_title, chats.chat_title),
-                chat_type = COALESCE(excluded.chat_type, chats.chat_type),
-                is_active = excluded.is_active,
-                updated_at = excluded.updated_at
-            """,
-            (chat_id, c_title, c_type, now, active_int, now),
-        )
+    # Upsert chats record
+    db["chats"].update_one(
+        {"chat_id": chat_id},
+        {
+            "$set": {
+                "chat_title": c_title,
+                "chat_type": c_type,
+                "is_active": active_int,
+                "updated_at": now,
+            },
+            "$setOnInsert": {
+                "added_at": now,
+            },
+        },
+        upsert=True,
+    )
 
-        # Initialize default settings if not exists
-        cursor.execute(
-            """
-            INSERT INTO chat_settings (
-                chat_id, anti_link_enabled, anti_bio_link_enabled, clean_service_enabled, anti_spam_enabled, flood_detection_enabled,
-                flood_threshold_messages, flood_window_seconds,
-                warning_system_enabled, auto_restrict_enabled,
-                anti_forward_enabled, anti_join_spam_enabled, anti_bot_enabled,
-                media_restrictions_enabled, allowed_media_types,
-                spam_window_seconds, warning_limit, restriction_duration_seconds,
-                warning_delete_after_seconds, raid_mode_enabled, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(chat_id) DO NOTHING
-            """,
-            (
-                chat_id,
-                1 if getattr(config, "ANTI_LINK_ENABLED", True) else 0,
-                1 if getattr(config, "ANTI_BIO_LINK_ENABLED", True) else 0,
-                1 if getattr(config, "CLEAN_SERVICE_ENABLED", True) else 0,
-                1 if getattr(config, "ANTI_SPAM_ENABLED", True) else 0,
-                1 if getattr(config, "FLOOD_DETECTION_ENABLED", True) else 0,
-                getattr(config, "FLOOD_MESSAGE_LIMIT", 8),
-                getattr(config, "FLOOD_WINDOW_SECONDS", 10),
-                1,  # warning_system_enabled
-                1,  # auto_restrict_enabled
-                1 if getattr(config, "ANTI_FORWARD_ENABLED", False) else 0,
-                1 if getattr(config, "ANTI_JOIN_SPAM_ENABLED", False) else 0,
-                1 if getattr(config, "ANTI_BOT_ENABLED", False) else 0,
-                1 if getattr(config, "MEDIA_RESTRICTIONS_ENABLED", False) else 0,
-                json.dumps(getattr(config, "DEFAULT_ALLOWED_MEDIA", {})),
-                getattr(config, "SPAM_WINDOW_SECONDS", 30),
-                getattr(config, "SPAM_WARNING_LIMIT", 2),
-                getattr(config, "SPAM_RESTRICTION_SECONDS", 86400),
-                getattr(config, "WARNING_DELETE_AFTER_SECONDS", 10),
-                0,  # raid_mode_enabled
-                now,
-            ),
-        )
-        conn.commit()
+    # Initialize default settings if not exists
+    default_settings = {
+        "chat_id": chat_id,
+        "anti_link_enabled": 1 if getattr(config, "ANTI_LINK_ENABLED", True) else 0,
+        "anti_bio_link_enabled": 1 if getattr(config, "ANTI_BIO_LINK_ENABLED", True) else 0,
+        "clean_service_enabled": 1 if getattr(config, "CLEAN_SERVICE_ENABLED", True) else 0,
+        "anti_spam_enabled": 1 if getattr(config, "ANTI_SPAM_ENABLED", True) else 0,
+        "flood_detection_enabled": 1 if getattr(config, "FLOOD_DETECTION_ENABLED", True) else 0,
+        "flood_threshold_messages": getattr(config, "FLOOD_MESSAGE_LIMIT", 8),
+        "flood_window_seconds": getattr(config, "FLOOD_WINDOW_SECONDS", 10),
+        "warning_system_enabled": 1,
+        "auto_restrict_enabled": 1,
+        "anti_forward_enabled": 1 if getattr(config, "ANTI_FORWARD_ENABLED", False) else 0,
+        "anti_join_spam_enabled": 1 if getattr(config, "ANTI_JOIN_SPAM_ENABLED", False) else 0,
+        "anti_bot_enabled": 1 if getattr(config, "ANTI_BOT_ENABLED", False) else 0,
+        "media_restrictions_enabled": 1 if getattr(config, "MEDIA_RESTRICTIONS_ENABLED", False) else 0,
+        "allowed_media_types": json.dumps(getattr(config, "DEFAULT_ALLOWED_MEDIA", {})),
+        "spam_window_seconds": getattr(config, "SPAM_WINDOW_SECONDS", 30),
+        "warning_limit": getattr(config, "SPAM_WARNING_LIMIT", 2),
+        "restriction_duration_seconds": getattr(config, "SPAM_RESTRICTION_SECONDS", 86400),
+        "warning_delete_after_seconds": getattr(config, "WARNING_DELETE_AFTER_SECONDS", 10),
+        "custom_warning_msg_1": None,
+        "custom_warning_msg_2": None,
+        "custom_greeting_msg": None,
+        "greeting_enabled": 1,
+        "raid_mode_enabled": 0,
+        "updated_at": now,
+    }
+
+    db["chat_settings"].update_one(
+        {"chat_id": chat_id},
+        {"$setOnInsert": default_settings},
+        upsert=True,
+    )
 
 
 def set_chat_active(chat_id: int, is_active: bool, db_path: str | None = None) -> None:
     """Mark a group or channel active or inactive upon bot addition/removal."""
-    path = db_path or get_db_path()
+    db = get_db()
     active_int = 1 if is_active else 0
     now = time.time()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE chats SET is_active = ?, updated_at = ? WHERE chat_id = ?",
-            (active_int, now, chat_id),
-        )
-        conn.commit()
+    db["chats"].update_one(
+        {"chat_id": chat_id},
+        {"$set": {"is_active": active_int, "updated_at": now}},
+    )
 
 
 def get_group_settings(chat_id: int, db_path: str | None = None) -> dict[str, Any]:
@@ -624,61 +215,78 @@ def get_group_settings(chat_id: int, db_path: str | None = None) -> dict[str, An
     Retrieve comprehensive per-group or per-channel settings.
     If the chat has no stored configuration, initializes default settings seamlessly.
     """
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT c.chat_title, c.chat_type, c.added_at, c.is_active, s.*
-            FROM chat_settings s
-            JOIN chats c ON c.chat_id = s.chat_id
-            WHERE s.chat_id = ?
-            """,
-            (chat_id,),
-        )
-        row = cursor.fetchone()
-        if row:
-            d = dict(row)
+    db = get_db()
+    s_doc = db["chat_settings"].find_one({"chat_id": chat_id})
+    c_doc = db["chats"].find_one({"chat_id": chat_id})
+
+    if s_doc:
+        allowed_media_raw = s_doc.get("allowed_media_types")
+        if isinstance(allowed_media_raw, dict):
+            allowed_media = allowed_media_raw
+        elif isinstance(allowed_media_raw, str):
             try:
-                allowed_media = json.loads(d.get("allowed_media_types") or "{}")
+                allowed_media = json.loads(allowed_media_raw)
             except Exception:
                 allowed_media = getattr(config, "DEFAULT_ALLOWED_MEDIA", {})
+        else:
+            allowed_media = getattr(config, "DEFAULT_ALLOWED_MEDIA", {})
 
-            return {
-                "chat_id": d["chat_id"],
-                "chat_title": d.get("chat_title") or "Unnamed Chat",
-                "chat_type": d.get("chat_type") or "group",
-                "added_at": d.get("added_at") or 0.0,
-                "anti_link_enabled": bool(d.get("anti_link_enabled", 1)),
-                "anti_bio_link_enabled": bool(d.get("anti_bio_link_enabled", 1)),
-                "clean_service_enabled": bool(d.get("clean_service_enabled", 1)),
-                "anti_spam_enabled": bool(d.get("anti_spam_enabled", 1)),
-                "flood_detection_enabled": bool(d.get("flood_detection_enabled", 1)),
-                "flood_threshold_messages": int(d.get("flood_threshold_messages") or 8),
-                "flood_window_seconds": int(d.get("flood_window_seconds") or 10),
-                "warning_system_enabled": bool(d.get("warning_system_enabled", 1)),
-                "auto_restrict_enabled": bool(d.get("auto_restrict_enabled", 1)),
-                "anti_forward_enabled": bool(d.get("anti_forward_enabled", 0)),
-                "anti_join_spam_enabled": bool(d.get("anti_join_spam_enabled", 0)),
-                "anti_bot_enabled": bool(d.get("anti_bot_enabled", 0)),
-                "media_restrictions_enabled": bool(d.get("media_restrictions_enabled", 0)),
-                "allowed_media_types": allowed_media,
-                "spam_window_seconds": int(d.get("spam_window_seconds") or 30),
-                "warning_limit": int(d.get("warning_limit") or 2),
-                "restriction_duration_seconds": int(d.get("restriction_duration_seconds") or 86400),
-                "warning_delete_after_seconds": int(d.get("warning_delete_after_seconds") or 10),
-                "custom_warning_msg_1": d.get("custom_warning_msg_1"),
-                "custom_warning_msg_2": d.get("custom_warning_msg_2"),
-                "custom_greeting_msg": d.get("custom_greeting_msg"),
-                "greeting_enabled": bool(d.get("greeting_enabled", 1)),
-                "raid_mode_enabled": bool(d.get("raid_mode_enabled", 0)),
-                "is_active": bool(d.get("is_active", 1)),
-                "updated_at": d.get("updated_at") or 0.0,
-            }
+        chat_title = c_doc.get("chat_title") if c_doc else "Unnamed Chat"
+        chat_type = c_doc.get("chat_type") if c_doc else "group"
+        added_at = c_doc.get("added_at") if c_doc else 0.0
+        is_active = bool(c_doc.get("is_active", 1)) if c_doc else True
 
-    # If row does not exist yet, register and return default config
-    register_or_update_chat(chat_id, None, None, is_active=True, db_path=path)
-    return get_group_settings(chat_id, db_path=path)
+        return {
+            "chat_id": chat_id,
+            "chat_title": chat_title or "Unnamed Chat",
+            "chat_type": chat_type or "group",
+            "added_at": float(added_at or 0.0),
+            "anti_link_enabled": bool(s_doc.get("anti_link_enabled", 1)),
+            "anti_bio_link_enabled": bool(s_doc.get("anti_bio_link_enabled", 1)),
+            "clean_service_enabled": bool(s_doc.get("clean_service_enabled", 1)),
+            "anti_spam_enabled": bool(s_doc.get("anti_spam_enabled", 1)),
+            "flood_detection_enabled": bool(s_doc.get("flood_detection_enabled", 1)),
+            "flood_threshold_messages": int(s_doc.get("flood_threshold_messages") or 8),
+            "flood_window_seconds": int(s_doc.get("flood_window_seconds") or 10),
+            "warning_system_enabled": bool(s_doc.get("warning_system_enabled", 1)),
+            "auto_restrict_enabled": bool(s_doc.get("auto_restrict_enabled", 1)),
+            "anti_forward_enabled": bool(s_doc.get("anti_forward_enabled", 0)),
+            "anti_join_spam_enabled": bool(s_doc.get("anti_join_spam_enabled", 0)),
+            "anti_bot_enabled": bool(s_doc.get("anti_bot_enabled", 0)),
+            "media_restrictions_enabled": bool(s_doc.get("media_restrictions_enabled", 0)),
+            "allowed_media_types": allowed_media,
+            "spam_window_seconds": int(s_doc.get("spam_window_seconds") or 30),
+            "warning_limit": int(s_doc.get("warning_limit") or 2),
+            "restriction_duration_seconds": int(s_doc.get("restriction_duration_seconds") or 86400),
+            "warning_delete_after_seconds": int(s_doc.get("warning_delete_after_seconds") or 10),
+            "custom_warning_msg_1": s_doc.get("custom_warning_msg_1"),
+            "custom_warning_msg_2": s_doc.get("custom_warning_msg_2"),
+            "custom_greeting_msg": s_doc.get("custom_greeting_msg"),
+            "greeting_enabled": bool(s_doc.get("greeting_enabled", 1)),
+            "raid_mode_enabled": bool(s_doc.get("raid_mode_enabled", 0)),
+            # Abuse Detection & Auto-Moderation System Configuration
+            "abuse_detection_enabled": bool(s_doc.get("abuse_detection_enabled", 1)),
+            "abuse_sexual_language": bool(s_doc.get("abuse_sexual_language", 1)),
+            "abuse_general_language": bool(s_doc.get("abuse_general_language", 1)),
+            "abuse_hindi_hinglish": bool(s_doc.get("abuse_hindi_hinglish", 1)),
+            "abuse_harassment": bool(s_doc.get("abuse_harassment", 1)),
+            "abuse_threats": bool(s_doc.get("abuse_threats", 1)),
+            "abuse_bypass_detection": bool(s_doc.get("abuse_bypass_detection", 1)),
+            "abuse_warning_system": bool(s_doc.get("abuse_warning_system", 1)),
+            "abuse_warning_limit": int(s_doc.get("abuse_warning_limit") or 3),
+            "abuse_mute_duration_minutes": int(s_doc.get("abuse_mute_duration_minutes") or 30),
+            "abuse_warning_expiry_hours": int(s_doc.get("abuse_warning_expiry_hours") or 24),
+            "abuse_delete_violating": bool(s_doc.get("abuse_delete_violating", 1)),
+            "abuse_custom_blocked_words": s_doc.get("abuse_custom_blocked_words") or [],
+            "abuse_custom_allowed_words": s_doc.get("abuse_custom_allowed_words") or [],
+            "abuse_trusted_users": s_doc.get("abuse_trusted_users") or [],
+            "is_active": is_active,
+            "updated_at": float(s_doc.get("updated_at") or 0.0),
+        }
+
+    # If document does not exist yet, register and return default config
+    register_or_update_chat(chat_id, None, None, is_active=True)
+    return get_group_settings(chat_id)
 
 
 def update_group_feature(chat_id: int, feature_col: str, enabled: bool, db_path: str | None = None) -> None:
@@ -697,25 +305,31 @@ def update_group_feature(chat_id: int, feature_col: str, enabled: bool, db_path:
         "media_restrictions_enabled",
         "raid_mode_enabled",
         "greeting_enabled",
+        "abuse_detection_enabled",
+        "abuse_sexual_language",
+        "abuse_general_language",
+        "abuse_hindi_hinglish",
+        "abuse_harassment",
+        "abuse_threats",
+        "abuse_bypass_detection",
+        "abuse_warning_system",
+        "abuse_delete_violating",
     }
     if feature_col not in valid_cols:
         raise ValueError(f"Invalid feature column: {feature_col}")
 
-    path = db_path or get_db_path()
+    db = get_db()
     val = 1 if enabled else 0
     now = time.time()
 
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT chat_id FROM chat_settings WHERE chat_id = ?", (chat_id,))
-        if not cursor.fetchone():
-            register_or_update_chat(chat_id, None, None, is_active=True, db_path=path)
+    # Ensure registered
+    if not db["chat_settings"].find_one({"chat_id": chat_id}):
+        register_or_update_chat(chat_id, None, None, is_active=True)
 
-        cursor.execute(
-            f"UPDATE chat_settings SET {feature_col} = ?, updated_at = ? WHERE chat_id = ?",
-            (val, now, chat_id),
-        )
-        conn.commit()
+    db["chat_settings"].update_one(
+        {"chat_id": chat_id},
+        {"$set": {feature_col: val, "updated_at": now}},
+    )
 
 
 def update_group_numeric_setting(chat_id: int, setting_col: str, value: int, db_path: str | None = None) -> None:
@@ -727,24 +341,23 @@ def update_group_numeric_setting(chat_id: int, setting_col: str, value: int, db_
         "warning_delete_after_seconds",
         "flood_threshold_messages",
         "flood_window_seconds",
+        "abuse_warning_limit",
+        "abuse_mute_duration_minutes",
+        "abuse_warning_expiry_hours",
     }
     if setting_col not in valid_cols:
         raise ValueError(f"Invalid setting column: {setting_col}")
 
-    path = db_path or get_db_path()
+    db = get_db()
     now = time.time()
 
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT chat_id FROM chat_settings WHERE chat_id = ?", (chat_id,))
-        if not cursor.fetchone():
-            register_or_update_chat(chat_id, None, None, is_active=True, db_path=path)
+    if not db["chat_settings"].find_one({"chat_id": chat_id}):
+        register_or_update_chat(chat_id, None, None, is_active=True)
 
-        cursor.execute(
-            f"UPDATE chat_settings SET {setting_col} = ?, updated_at = ? WHERE chat_id = ?",
-            (value, now, chat_id),
-        )
-        conn.commit()
+    db["chat_settings"].update_one(
+        {"chat_id": chat_id},
+        {"$set": {setting_col: int(value), "updated_at": now}},
+    )
 
 
 def update_group_text_setting(chat_id: int, setting_col: str, value: str | None, db_path: str | None = None) -> None:
@@ -758,40 +371,36 @@ def update_group_text_setting(chat_id: int, setting_col: str, value: str | None,
     if setting_col not in valid_cols:
         raise ValueError(f"Invalid text setting column: {setting_col}")
 
-    path = db_path or get_db_path()
+    db = get_db()
     now = time.time()
 
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT chat_id FROM chat_settings WHERE chat_id = ?", (chat_id,))
-        if not cursor.fetchone():
-            register_or_update_chat(chat_id, None, None, is_active=True, db_path=path)
+    if not db["chat_settings"].find_one({"chat_id": chat_id}):
+        register_or_update_chat(chat_id, None, None, is_active=True)
 
-        cursor.execute(
-            f"UPDATE chat_settings SET {setting_col} = ?, updated_at = ? WHERE chat_id = ?",
-            (value, now, chat_id),
-        )
-        conn.commit()
+    db["chat_settings"].update_one(
+        {"chat_id": chat_id},
+        {"$set": {setting_col: value, "updated_at": now}},
+    )
 
 
 def set_group_anti_link(chat_id: int, enabled: bool, db_path: str | None = None) -> None:
     """Enable or disable anti-link protection for a specific group."""
-    update_group_feature(chat_id, "anti_link_enabled", enabled, db_path=db_path)
+    update_group_feature(chat_id, "anti_link_enabled", enabled)
 
 
 def set_group_anti_bio_link(chat_id: int, enabled: bool, db_path: str | None = None) -> None:
     """Enable or disable anti-bio-link protection for a specific group."""
-    update_group_feature(chat_id, "anti_bio_link_enabled", enabled, db_path=db_path)
+    update_group_feature(chat_id, "anti_bio_link_enabled", enabled)
 
 
 def set_group_clean_service(chat_id: int, enabled: bool, db_path: str | None = None) -> None:
     """Enable or disable cleaning service messages for a specific group."""
-    update_group_feature(chat_id, "clean_service_enabled", enabled, db_path=db_path)
+    update_group_feature(chat_id, "clean_service_enabled", enabled)
 
 
 def set_group_anti_spam(chat_id: int, enabled: bool, db_path: str | None = None) -> None:
     """Enable or disable anti-spam protection for a specific group."""
-    update_group_feature(chat_id, "anti_spam_enabled", enabled, db_path=db_path)
+    update_group_feature(chat_id, "anti_spam_enabled", enabled)
 
 
 # =============================================================================
@@ -800,7 +409,7 @@ def set_group_anti_spam(chat_id: int, enabled: bool, db_path: str | None = None)
 
 def get_media_restrictions(chat_id: int, db_path: str | None = None) -> dict[str, bool]:
     """Retrieve allowed media types dictionary for a group."""
-    settings = get_group_settings(chat_id, db_path=db_path)
+    settings = get_group_settings(chat_id)
     allowed = settings.get("allowed_media_types")
     if isinstance(allowed, dict):
         return allowed
@@ -809,9 +418,9 @@ def get_media_restrictions(chat_id: int, db_path: str | None = None) -> dict[str
 
 def set_media_restriction(chat_id: int, media_type: str, allowed: bool, db_path: str | None = None) -> None:
     """Toggle whether a specific media type (photo, video, sticker, etc.) is allowed."""
-    current = get_media_restrictions(chat_id, db_path=db_path)
+    current = get_media_restrictions(chat_id)
     current[media_type] = allowed
-    update_group_text_setting(chat_id, "allowed_media_types", json.dumps(current), db_path=db_path)
+    update_group_text_setting(chat_id, "allowed_media_types", json.dumps(current))
 
 
 # =============================================================================
@@ -821,21 +430,15 @@ def set_media_restriction(chat_id: int, media_type: str, allowed: bool, db_path:
 def add_whitelisted_domain(chat_id: int, domain: str, added_by: int = 0, db_path: str | None = None) -> bool:
     """Add a domain to the group's link whitelist."""
     clean_domain = domain.strip().lower().replace("http://", "").replace("https://", "").split("/")[0]
-    path = db_path or get_db_path()
     now = time.time()
     try:
-        with get_connection(path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO chat_link_whitelist (chat_id, domain, added_by, added_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(chat_id, domain) DO NOTHING
-                """,
-                (chat_id, clean_domain, added_by, now),
-            )
-            conn.commit()
-            return True
+        db = get_db()
+        db["chat_link_whitelist"].update_one(
+            {"chat_id": chat_id, "domain": clean_domain},
+            {"$set": {"added_by": added_by, "added_at": now}},
+            upsert=True,
+        )
+        return True
     except Exception as exc:
         logger.error("Failed to add whitelist domain '%s' in chat %s: %s", domain, chat_id, exc)
         return False
@@ -844,33 +447,22 @@ def add_whitelisted_domain(chat_id: int, domain: str, added_by: int = 0, db_path
 def remove_whitelisted_domain(chat_id: int, domain: str, db_path: str | None = None) -> bool:
     """Remove a domain from the group's link whitelist."""
     clean_domain = domain.strip().lower().replace("http://", "").replace("https://", "").split("/")[0]
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM chat_link_whitelist WHERE chat_id = ? AND domain = ?",
-            (chat_id, clean_domain),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+    db = get_db()
+    res = db["chat_link_whitelist"].delete_one({"chat_id": chat_id, "domain": clean_domain})
+    return res.deleted_count > 0
 
 
 def get_whitelisted_domains(chat_id: int, db_path: str | None = None) -> list[str]:
     """Retrieve all whitelisted domains for a group."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT domain FROM chat_link_whitelist WHERE chat_id = ? ORDER BY domain ASC",
-            (chat_id,),
-        )
-        return [row["domain"] for row in cursor.fetchall()]
+    db = get_db()
+    cursor = db["chat_link_whitelist"].find({"chat_id": chat_id}).sort("domain", ASCENDING)
+    return [doc["domain"] for doc in cursor]
 
 
 def is_domain_whitelisted(chat_id: int, domain: str, db_path: str | None = None) -> bool:
     """Check if a domain or URL is whitelisted in the group."""
     clean_domain = domain.strip().lower().replace("http://", "").replace("https://", "").split("/")[0]
-    whitelisted = get_whitelisted_domains(chat_id, db_path=db_path)
+    whitelisted = get_whitelisted_domains(chat_id)
     for w in whitelisted:
         if clean_domain == w or clean_domain.endswith("." + w):
             return True
@@ -880,21 +472,15 @@ def is_domain_whitelisted(chat_id: int, domain: str, db_path: str | None = None)
 def add_blacklisted_pattern(chat_id: int, pattern: str, added_by: int = 0, db_path: str | None = None) -> bool:
     """Add a domain or keyword pattern to the group's blacklist."""
     clean_pattern = pattern.strip().lower()
-    path = db_path or get_db_path()
     now = time.time()
     try:
-        with get_connection(path) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO chat_blacklist (chat_id, pattern_or_domain, added_by, added_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(chat_id, pattern_or_domain) DO NOTHING
-                """,
-                (chat_id, clean_pattern, added_by, now),
-            )
-            conn.commit()
-            return True
+        db = get_db()
+        db["chat_blacklist"].update_one(
+            {"chat_id": chat_id, "pattern_or_domain": clean_pattern},
+            {"$set": {"added_by": added_by, "added_at": now}},
+            upsert=True,
+        )
+        return True
     except Exception as exc:
         logger.error("Failed to add blacklist pattern '%s' in chat %s: %s", pattern, chat_id, exc)
         return False
@@ -903,27 +489,16 @@ def add_blacklisted_pattern(chat_id: int, pattern: str, added_by: int = 0, db_pa
 def remove_blacklisted_pattern(chat_id: int, pattern: str, db_path: str | None = None) -> bool:
     """Remove a pattern from the group's blacklist."""
     clean_pattern = pattern.strip().lower()
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM chat_blacklist WHERE chat_id = ? AND pattern_or_domain = ?",
-            (chat_id, clean_pattern),
-        )
-        conn.commit()
-        return cursor.rowcount > 0
+    db = get_db()
+    res = db["chat_blacklist"].delete_one({"chat_id": chat_id, "pattern_or_domain": clean_pattern})
+    return res.deleted_count > 0
 
 
 def get_blacklisted_patterns(chat_id: int, db_path: str | None = None) -> list[str]:
     """Retrieve all blacklisted patterns for a group."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT pattern_or_domain FROM chat_blacklist WHERE chat_id = ? ORDER BY pattern_or_domain ASC",
-            (chat_id,),
-        )
-        return [row["pattern_or_domain"] for row in cursor.fetchall()]
+    db = get_db()
+    cursor = db["chat_blacklist"].find({"chat_id": chat_id}).sort("pattern_or_domain", ASCENDING)
+    return [doc["pattern_or_domain"] for doc in cursor]
 
 
 def is_content_blacklisted(chat_id: int, text: str, db_path: str | None = None) -> bool:
@@ -931,7 +506,7 @@ def is_content_blacklisted(chat_id: int, text: str, db_path: str | None = None) 
     if not text:
         return False
     lower_text = text.lower()
-    patterns = get_blacklisted_patterns(chat_id, db_path=db_path)
+    patterns = get_blacklisted_patterns(chat_id)
     for pat in patterns:
         if pat in lower_text:
             return True
@@ -960,61 +535,70 @@ def increment_stat(
         "forwards_deleted",
         "media_deleted",
         "raid_actions_taken",
+        "abuse_deleted",
     }
     if stat_name not in valid_stats:
         return
 
-    path = db_path or get_db_path()
+    db = get_db()
     now = time.time()
 
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO chat_statistics (
-                chat_id, chat_title, total_messages_checked, links_deleted,
-                spam_deleted, warnings_issued, restrictions_applied,
-                banned_members, forwards_deleted, media_deleted, raid_actions_taken, updated_at
-            ) VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, ?)
-            ON CONFLICT(chat_id) DO UPDATE SET updated_at = excluded.updated_at
-            """,
-            (chat_id, chat_title, now),
-        )
-        if chat_title:
-            cursor.execute(
-                "UPDATE chat_statistics SET chat_title = ? WHERE chat_id = ?",
-                (chat_title, chat_id),
-            )
-        cursor.execute(
-            f"UPDATE chat_statistics SET {stat_name} = {stat_name} + ?, updated_at = ? WHERE chat_id = ?",
-            (count, now, chat_id),
-        )
-        conn.commit()
+    set_on_insert: dict[str, Any] = {"chat_id": chat_id}
+    for s in valid_stats:
+        if s != stat_name:
+            set_on_insert[s] = 0
+
+    update_doc: dict[str, Any] = {
+        "$inc": {stat_name: count},
+        "$set": {"updated_at": now},
+        "$setOnInsert": set_on_insert,
+    }
+    if chat_title:
+        update_doc["$set"]["chat_title"] = chat_title
+
+    db["chat_statistics"].update_one(
+        {"chat_id": chat_id},
+        update_doc,
+        upsert=True,
+    )
 
 
 def get_group_stats(chat_id: int, db_path: str | None = None) -> dict[str, Any]:
     """Retrieve moderation statistics for a specific group or channel."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM chat_statistics WHERE chat_id = ?", (chat_id,))
-        row = cursor.fetchone()
-        if not row:
-            return {
-                "chat_id": chat_id,
-                "chat_title": "Unnamed Chat",
-                "total_messages_checked": 0,
-                "links_deleted": 0,
-                "spam_deleted": 0,
-                "warnings_issued": 0,
-                "restrictions_applied": 0,
-                "banned_members": 0,
-                "forwards_deleted": 0,
-                "media_deleted": 0,
-                "raid_actions_taken": 0,
-                "updated_at": 0.0,
-            }
-        return dict(row)
+    db = get_db()
+    doc = db["chat_statistics"].find_one({"chat_id": chat_id})
+    if not doc:
+        return {
+            "chat_id": chat_id,
+            "chat_title": "Unnamed Chat",
+            "total_messages_checked": 0,
+            "links_deleted": 0,
+            "spam_deleted": 0,
+            "warnings_issued": 0,
+            "restrictions_applied": 0,
+            "banned_members": 0,
+            "forwards_deleted": 0,
+            "media_deleted": 0,
+            "raid_actions_taken": 0,
+            "abuse_deleted": 0,
+            "updated_at": 0.0,
+        }
+
+    return {
+        "chat_id": chat_id,
+        "chat_title": doc.get("chat_title") or "Unnamed Chat",
+        "total_messages_checked": int(doc.get("total_messages_checked") or 0),
+        "links_deleted": int(doc.get("links_deleted") or 0),
+        "spam_deleted": int(doc.get("spam_deleted") or 0),
+        "warnings_issued": int(doc.get("warnings_issued") or 0),
+        "restrictions_applied": int(doc.get("restrictions_applied") or 0),
+        "banned_members": int(doc.get("banned_members") or 0),
+        "forwards_deleted": int(doc.get("forwards_deleted") or 0),
+        "media_deleted": int(doc.get("media_deleted") or 0),
+        "raid_actions_taken": int(doc.get("raid_actions_taken") or 0),
+        "abuse_deleted": int(doc.get("abuse_deleted") or 0),
+        "updated_at": float(doc.get("updated_at") or 0.0),
+    }
 
 
 # =============================================================================
@@ -1028,37 +612,44 @@ def log_moderation_event(
     details: str,
     db_path: str | None = None,
 ) -> None:
-    """Record an audit trail event for a moderation action in SQLite."""
-    path = db_path or get_db_path()
+    """Record an audit trail event for a moderation action in MongoDB."""
+    db = get_db()
     now = time.time()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO chat_moderation_logs (chat_id, user_id, action, details, timestamp)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (chat_id, user_id, action, details, now),
-        )
-        conn.commit()
+    next_id = get_next_sequence("chat_moderation_logs", db=db)
+    db["chat_moderation_logs"].insert_one(
+        {
+            "id": next_id,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "action": action,
+            "details": details,
+            "timestamp": now,
+        }
+    )
 
 
 def get_recent_moderation_logs(chat_id: int, limit: int = 15, db_path: str | None = None) -> list[dict[str, Any]]:
     """Retrieve recent moderation audit actions for a specific group."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, chat_id, user_id, action, details, timestamp
-            FROM chat_moderation_logs
-            WHERE chat_id = ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-            """,
-            (chat_id, limit),
+    db = get_db()
+    cursor = (
+        db["chat_moderation_logs"]
+        .find({"chat_id": chat_id})
+        .sort("timestamp", DESCENDING)
+        .limit(limit)
+    )
+    results = []
+    for doc in cursor:
+        results.append(
+            {
+                "id": doc.get("id"),
+                "chat_id": doc.get("chat_id"),
+                "user_id": doc.get("user_id"),
+                "action": doc.get("action"),
+                "details": doc.get("details"),
+                "timestamp": float(doc.get("timestamp") or 0.0),
+            }
         )
-        return [dict(row) for row in cursor.fetchall()]
+    return results
 
 
 # =============================================================================
@@ -1067,34 +658,30 @@ def get_recent_moderation_logs(chat_id: int, limit: int = 15, db_path: str | Non
 
 def get_active_incident(chat_id: int, user_id: int, db_path: str | None = None) -> dict[str, Any] | None:
     """Retrieve the active spam incident for a given user in a group."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT chat_id, user_id, message_fingerprint, count, last_message_time, message_ids
-            FROM chat_spam_incidents
-            WHERE chat_id = ? AND user_id = ?
-            """,
-            (chat_id, user_id),
-        )
-        row = cursor.fetchone()
-        if not row:
-            return None
+    db = get_db()
+    doc = db["chat_spam_incidents"].find_one({"chat_id": chat_id, "user_id": user_id})
+    if not doc:
+        return None
 
+    raw_msg_ids = doc.get("message_ids")
+    if isinstance(raw_msg_ids, list):
+        message_ids = raw_msg_ids
+    elif isinstance(raw_msg_ids, str):
         try:
-            message_ids = json.loads(row["message_ids"])
+            message_ids = json.loads(raw_msg_ids)
         except Exception:
             message_ids = []
+    else:
+        message_ids = []
 
-        return {
-            "chat_id": row["chat_id"],
-            "user_id": row["user_id"],
-            "message_fingerprint": row["message_fingerprint"],
-            "count": row["count"],
-            "last_message_time": row["last_message_time"],
-            "message_ids": message_ids,
-        }
+    return {
+        "chat_id": doc["chat_id"],
+        "user_id": doc["user_id"],
+        "message_fingerprint": doc.get("message_fingerprint", ""),
+        "count": int(doc.get("count") or 1),
+        "last_message_time": float(doc.get("last_message_time") or 0.0),
+        "message_ids": message_ids,
+    }
 
 
 def save_active_incident(
@@ -1107,36 +694,25 @@ def save_active_incident(
     db_path: str | None = None,
 ) -> None:
     """Save or update an active spam incident in persistent storage."""
-    path = db_path or get_db_path()
-    message_ids_json = json.dumps(message_ids)
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO chat_spam_incidents (
-                chat_id, user_id, message_fingerprint, count, last_message_time, message_ids
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(chat_id, user_id) DO UPDATE SET
-                message_fingerprint = excluded.message_fingerprint,
-                count = excluded.count,
-                last_message_time = excluded.last_message_time,
-                message_ids = excluded.message_ids
-            """,
-            (chat_id, user_id, message_fingerprint, count, last_message_time, message_ids_json),
-        )
-        conn.commit()
+    db = get_db()
+    db["chat_spam_incidents"].update_one(
+        {"chat_id": chat_id, "user_id": user_id},
+        {
+            "$set": {
+                "message_fingerprint": message_fingerprint,
+                "count": count,
+                "last_message_time": last_message_time,
+                "message_ids": message_ids,
+            }
+        },
+        upsert=True,
+    )
 
 
 def clear_active_incident(chat_id: int, user_id: int, db_path: str | None = None) -> None:
     """Remove an active spam incident after expiration or restriction."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM chat_spam_incidents WHERE chat_id = ? AND user_id = ?",
-            (chat_id, user_id),
-        )
-        conn.commit()
+    db = get_db()
+    db["chat_spam_incidents"].delete_one({"chat_id": chat_id, "user_id": user_id})
 
 
 # =============================================================================
@@ -1145,51 +721,253 @@ def clear_active_incident(chat_id: int, user_id: int, db_path: str | None = None
 
 def add_user_warning(chat_id: int, user_id: int, reason: str, db_path: str | None = None) -> int:
     """Record a warning issued to a user and return their total active warning count."""
-    path = db_path or get_db_path()
+    db = get_db()
     now = time.time()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT count(*) FROM chat_warnings WHERE chat_id = ? AND user_id = ?",
-            (chat_id, user_id),
-        )
-        current_count = cursor.fetchone()[0]
-        new_warn_num = current_count + 1
+    current_count = db["chat_warnings"].count_documents({"chat_id": chat_id, "user_id": user_id})
+    new_warn_num = current_count + 1
+    next_id = get_next_sequence("chat_warnings", db=db)
 
-        cursor.execute(
-            """
-            INSERT INTO chat_warnings (chat_id, user_id, warning_number, reason, issued_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (chat_id, user_id, new_warn_num, reason, now),
-        )
-        conn.commit()
-        return new_warn_num
+    db["chat_warnings"].insert_one(
+        {
+            "id": next_id,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "warning_number": new_warn_num,
+            "reason": reason,
+            "issued_at": now,
+        }
+    )
+    return new_warn_num
 
 
 def get_user_warnings_count(chat_id: int, user_id: int, db_path: str | None = None) -> int:
     """Retrieve the total warning count issued to a user in a group."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT count(*) FROM chat_warnings WHERE chat_id = ? AND user_id = ?",
-            (chat_id, user_id),
-        )
-        return cursor.fetchone()[0]
+    db = get_db()
+    return db["chat_warnings"].count_documents({"chat_id": chat_id, "user_id": user_id})
 
 
 def reset_user_warnings(chat_id: int, user_id: int, db_path: str | None = None) -> int:
     """Clear all warnings for a user in a group and return the number of cleared records."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "DELETE FROM chat_warnings WHERE chat_id = ? AND user_id = ?",
-            (chat_id, user_id),
-        )
-        conn.commit()
-        return cursor.rowcount
+    db = get_db()
+    res = db["chat_warnings"].delete_many({"chat_id": chat_id, "user_id": user_id})
+    return res.deleted_count
+
+
+# =============================================================================
+# Abuse Detection & Auto-Moderation Database Management
+# =============================================================================
+
+def get_abuse_settings(chat_id: int) -> dict[str, Any]:
+    """Retrieve per-group Abuse Detection settings."""
+    settings = get_group_settings(chat_id)
+    return {
+        "chat_id": chat_id,
+        "abuse_detection_enabled": settings.get("abuse_detection_enabled", True),
+        "abuse_sexual_language": settings.get("abuse_sexual_language", True),
+        "abuse_general_language": settings.get("abuse_general_language", True),
+        "abuse_hindi_hinglish": settings.get("abuse_hindi_hinglish", True),
+        "abuse_harassment": settings.get("abuse_harassment", True),
+        "abuse_threats": settings.get("abuse_threats", True),
+        "abuse_bypass_detection": settings.get("abuse_bypass_detection", True),
+        "abuse_warning_system": settings.get("abuse_warning_system", True),
+        "abuse_warning_limit": settings.get("abuse_warning_limit", 3),
+        "abuse_mute_duration_minutes": settings.get("abuse_mute_duration_minutes", 30),
+        "abuse_warning_expiry_hours": settings.get("abuse_warning_expiry_hours", 24),
+        "abuse_delete_violating": settings.get("abuse_delete_violating", True),
+        "abuse_custom_blocked_words": settings.get("abuse_custom_blocked_words", []),
+        "abuse_custom_allowed_words": settings.get("abuse_custom_allowed_words", []),
+        "abuse_trusted_users": settings.get("abuse_trusted_users", []),
+    }
+
+
+def update_abuse_settings(chat_id: int, **kwargs) -> None:
+    """Update one or more Abuse moderation settings for a group."""
+    db = get_db()
+    now = time.time()
+    set_fields: dict[str, Any] = {"updated_at": now}
+    for k, v in kwargs.items():
+        set_fields[k] = v
+
+    # Ensure settings document exists
+    if not db["chat_settings"].find_one({"chat_id": chat_id}):
+        register_or_update_chat(chat_id, None, None, is_active=True)
+
+    db["chat_settings"].update_one(
+        {"chat_id": chat_id},
+        {"$set": set_fields},
+    )
+
+
+def get_abuse_custom_keywords(chat_id: int) -> tuple[list[str], list[str]]:
+    """Retrieve custom blocked and allowed keywords for a group. Returns (blocked_list, allowed_list)."""
+    settings = get_group_settings(chat_id)
+    blocked = settings.get("abuse_custom_blocked_words") or []
+    allowed = settings.get("abuse_custom_allowed_words") or []
+    return list(blocked), list(allowed)
+
+
+def add_abuse_custom_keyword(chat_id: int, word: str, is_blocked: bool = True) -> bool:
+    """Add a custom blocked or allowed keyword for a group."""
+    clean_word = word.strip().lower()
+    if not clean_word:
+        return False
+
+    db = get_db()
+    now = time.time()
+    field_name = "abuse_custom_blocked_words" if is_blocked else "abuse_custom_allowed_words"
+
+    # Ensure chat registered
+    if not db["chat_settings"].find_one({"chat_id": chat_id}):
+        register_or_update_chat(chat_id, None, None, is_active=True)
+
+    db["chat_settings"].update_one(
+        {"chat_id": chat_id},
+        {"$addToSet": {field_name: clean_word}, "$set": {"updated_at": now}},
+    )
+    return True
+
+
+def remove_abuse_custom_keyword(chat_id: int, word: str) -> bool:
+    """Remove a custom keyword from both blocked and allowed lists."""
+    clean_word = word.strip().lower()
+    if not clean_word:
+        return False
+
+    db = get_db()
+    now = time.time()
+    res = db["chat_settings"].update_one(
+        {"chat_id": chat_id},
+        {
+            "$pull": {
+                "abuse_custom_blocked_words": clean_word,
+                "abuse_custom_allowed_words": clean_word,
+            },
+            "$set": {"updated_at": now},
+        },
+    )
+    return res.modified_count > 0
+
+
+def add_user_abuse_warning(
+    chat_id: int,
+    user_id: int,
+    reason: str,
+    score: int = 50,
+    category: str = "general_abusive",
+    message_id: int | None = None,
+) -> int:
+    """Record an abuse warning issued to a user and return their active warning count."""
+    db = get_db()
+    now = time.time()
+    settings = get_group_settings(chat_id)
+    expiry_hours = settings.get("abuse_warning_expiry_hours", 24)
+    cutoff = now - (expiry_hours * 3600)
+
+    # Active warnings only (issued within expiry window)
+    active_count = db["chat_warnings"].count_documents({
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "category": "abuse",
+        "issued_at": {"$gte": cutoff},
+    })
+    new_warn_num = active_count + 1
+    next_id = get_next_sequence("chat_warnings", db=db)
+
+    db["chat_warnings"].insert_one({
+        "id": next_id,
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "warning_number": new_warn_num,
+        "category": "abuse",
+        "abuse_category": category,
+        "score": score,
+        "message_id": message_id,
+        "reason": reason,
+        "issued_at": now,
+        "expires_at": now + (expiry_hours * 3600),
+    })
+    return new_warn_num
+
+
+def get_user_abuse_warnings(
+    chat_id: int,
+    user_id: int,
+    expiry_hours: int = 24,
+) -> list[dict[str, Any]]:
+    """Retrieve all active abuse warnings for a user in a group."""
+    db = get_db()
+    now = time.time()
+    cutoff = now - (expiry_hours * 3600)
+    cursor = db["chat_warnings"].find({
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "category": "abuse",
+        "issued_at": {"$gte": cutoff},
+    }).sort("issued_at", DESCENDING)
+
+    results = []
+    for doc in cursor:
+        results.append({
+            "id": doc.get("id"),
+            "chat_id": doc.get("chat_id"),
+            "user_id": doc.get("user_id"),
+            "warning_number": doc.get("warning_number"),
+            "reason": doc.get("reason"),
+            "abuse_category": doc.get("abuse_category", "general_abusive"),
+            "score": doc.get("score", 50),
+            "issued_at": float(doc.get("issued_at") or 0.0),
+            "expires_at": float(doc.get("expires_at") or 0.0),
+        })
+    return results
+
+
+def get_user_abuse_warnings_count(
+    chat_id: int,
+    user_id: int,
+    expiry_hours: int = 24,
+) -> int:
+    """Retrieve active warning count for a user in a group."""
+    db = get_db()
+    now = time.time()
+    cutoff = now - (expiry_hours * 3600)
+    return db["chat_warnings"].count_documents({
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "category": "abuse",
+        "issued_at": {"$gte": cutoff},
+    })
+
+
+def reset_user_abuse_warnings(chat_id: int, user_id: int) -> int:
+    """Clear all abuse warnings for a user in a group and return cleared count."""
+    db = get_db()
+    res = db["chat_warnings"].delete_many({
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "category": "abuse",
+    })
+    return res.deleted_count
+
+
+def get_abuse_moderation_logs(chat_id: int, limit: int = 15) -> list[dict[str, Any]]:
+    """Retrieve recent abuse moderation logs for a group."""
+    db = get_db()
+    cursor = db["chat_moderation_logs"].find({
+        "chat_id": chat_id,
+        "action": {"$regex": r"^ABUSE_"},
+    }).sort("timestamp", DESCENDING).limit(limit)
+
+    results = []
+    for doc in cursor:
+        results.append({
+            "id": doc.get("id"),
+            "chat_id": doc.get("chat_id"),
+            "user_id": doc.get("user_id"),
+            "action": doc.get("action"),
+            "details": doc.get("details"),
+            "timestamp": float(doc.get("timestamp") or 0.0),
+        })
+    return results
 
 
 # =============================================================================
@@ -1207,50 +985,61 @@ def record_restriction(
     action: str = "mute",
     db_path: str | None = None,
 ) -> int:
-    """Record an applied restriction (mute or ban) into SQLite."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO user_restrictions (
-                chat_id, user_id, username, action, reason, previous_permissions,
-                restricted_at, expires_at, active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-            """,
-            (chat_id, user_id, username, action, reason, previous_permissions, restricted_at, expires_at),
-        )
-        conn.commit()
-        return cursor.lastrowid or 0
+    """Record an applied restriction (mute or ban) into MongoDB."""
+    db = get_db()
+    next_id = get_next_sequence("user_restrictions", db=db)
+    db["user_restrictions"].insert_one(
+        {
+            "id": next_id,
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "username": username,
+            "action": action,
+            "reason": reason,
+            "previous_permissions": previous_permissions,
+            "restricted_at": restricted_at,
+            "expires_at": expires_at,
+            "active": 1,
+        }
+    )
+    return next_id
 
 
 def lift_active_restrictions(chat_id: int, user_id: int, db_path: str | None = None) -> int:
     """Mark all active restrictions for a user in a group as lifted/inactive."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE user_restrictions SET active = 0 WHERE chat_id = ? AND user_id = ? AND active = 1",
-            (chat_id, user_id),
-        )
-        conn.commit()
-        return cursor.rowcount
+    db = get_db()
+    res = db["user_restrictions"].update_many(
+        {"chat_id": chat_id, "user_id": user_id, "active": 1},
+        {"$set": {"active": 0}},
+    )
+    return res.modified_count
 
 
 def get_user_restrictions(chat_id: int, user_id: int, db_path: str | None = None) -> list[dict[str, Any]]:
     """Retrieve restriction records for a user in a specific group."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT * FROM user_restrictions
-            WHERE chat_id = ? AND user_id = ?
-            ORDER BY restricted_at DESC
-            """,
-            (chat_id, user_id),
+    db = get_db()
+    cursor = (
+        db["user_restrictions"]
+        .find({"chat_id": chat_id, "user_id": user_id})
+        .sort("restricted_at", DESCENDING)
+    )
+    results = []
+    for doc in cursor:
+        results.append(
+            {
+                "id": doc.get("id"),
+                "chat_id": doc.get("chat_id"),
+                "user_id": doc.get("user_id"),
+                "username": doc.get("username"),
+                "action": doc.get("action", "mute"),
+                "reason": doc.get("reason", ""),
+                "previous_permissions": doc.get("previous_permissions"),
+                "restricted_at": float(doc.get("restricted_at") or 0.0),
+                "expires_at": float(doc.get("expires_at") or 0.0),
+                "active": int(doc.get("active") or 0),
+            }
         )
-        return [dict(row) for row in cursor.fetchall()]
+    return results
 
 
 # =============================================================================
@@ -1259,94 +1048,95 @@ def get_user_restrictions(chat_id: int, user_id: int, db_path: str | None = None
 
 def record_join_event(chat_id: int, user_id: int, is_bot: bool = False, db_path: str | None = None) -> None:
     """Record a member join event to track bursts and anti-bot activity."""
-    path = db_path or get_db_path()
+    db = get_db()
     now = time.time()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO chat_join_events (chat_id, user_id, is_bot, joined_at) VALUES (?, ?, ?, ?)",
-            (chat_id, user_id, 1 if is_bot else 0, now),
-        )
-        conn.commit()
+    db["chat_join_events"].insert_one(
+        {
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "is_bot": 1 if is_bot else 0,
+            "joined_at": now,
+        }
+    )
 
 
 def get_recent_join_events_count(chat_id: int, window_seconds: int = 10, db_path: str | None = None) -> int:
     """Count how many users joined the group within the last window_seconds."""
-    path = db_path or get_db_path()
+    db = get_db()
     cutoff = time.time() - window_seconds
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT count(*) FROM chat_join_events WHERE chat_id = ? AND joined_at >= ?",
-            (chat_id, cutoff),
-        )
-        return cursor.fetchone()[0]
+    return db["chat_join_events"].count_documents({"chat_id": chat_id, "joined_at": {"$gte": cutoff}})
 
 
 # =============================================================================
 # Multi-Group / Multi-Channel Owner Queries
 # =============================================================================
 
-def get_registered_chats(chat_type: str | None = None, active_only: bool = True, db_path: str | None = None) -> list[dict[str, Any]]:
+def get_registered_chats(
+    chat_type: str | None = None, active_only: bool = True, db_path: str | None = None
+) -> list[dict[str, Any]]:
     """Retrieve registered chats, optionally filtered by chat_type ('group', 'channel')."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        query = "SELECT * FROM chats WHERE 1=1"
-        params: list[Any] = []
-        if active_only:
-            query += " AND is_active = 1"
-        if chat_type:
-            if chat_type == "channel":
-                query += " AND chat_type = 'channel'"
-            else:
-                query += " AND chat_type IN ('group', 'supergroup')"
-        query += " ORDER BY chat_title ASC"
-        cursor.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+    db = get_db()
+    filter_query: dict[str, Any] = {}
+    if active_only:
+        filter_query["is_active"] = 1
+
+    if chat_type:
+        if chat_type == "channel":
+            filter_query["chat_type"] = "channel"
+        else:
+            filter_query["chat_type"] = {"$in": ["group", "supergroup"]}
+
+    cursor = db["chats"].find(filter_query).sort("chat_title", ASCENDING)
+    results = []
+    for doc in cursor:
+        results.append(
+            {
+                "chat_id": doc.get("chat_id"),
+                "chat_title": doc.get("chat_title") or "Chat",
+                "chat_type": doc.get("chat_type") or "group",
+                "added_at": float(doc.get("added_at") or 0.0),
+                "is_active": int(doc.get("is_active", 1)),
+                "updated_at": float(doc.get("updated_at") or 0.0),
+            }
+        )
+    return results
 
 
 def get_global_bot_stats(db_path: str | None = None) -> dict[str, Any]:
     """Retrieve aggregate statistics across all registered groups and channels for /owner."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        # Counts from chats
-        cursor.execute("SELECT count(*) FROM chats WHERE is_active = 1 AND chat_type IN ('group', 'supergroup')")
-        active_groups = cursor.fetchone()[0]
+    db = get_db()
 
-        cursor.execute("SELECT count(*) FROM chats WHERE is_active = 1 AND chat_type = 'channel'")
-        active_channels = cursor.fetchone()[0]
+    active_groups = db["chats"].count_documents({"is_active": 1, "chat_type": {"$in": ["group", "supergroup"]}})
+    active_channels = db["chats"].count_documents({"is_active": 1, "chat_type": "channel"})
+    total_chats = db["chats"].count_documents({})
 
-        cursor.execute("SELECT count(*) FROM chats")
-        total_chats = cursor.fetchone()[0]
-
-        # Aggregates from chat_statistics
-        cursor.execute(
-            """
-            SELECT
-                COALESCE(SUM(total_messages_checked), 0) AS total_messages,
-                COALESCE(SUM(links_deleted), 0) AS total_links_deleted,
-                COALESCE(SUM(spam_deleted), 0) AS total_spam_deleted,
-                COALESCE(SUM(warnings_issued), 0) AS total_warnings,
-                COALESCE(SUM(restrictions_applied), 0) AS total_restrictions,
-                COALESCE(SUM(banned_members), 0) AS total_bans
-            FROM chat_statistics
-            """
-        )
-        stats_row = cursor.fetchone()
-
-        return {
-            "active_groups": active_groups,
-            "active_channels": active_channels,
-            "total_registered_chats": total_chats,
-            "total_messages": stats_row["total_messages"],
-            "total_links_deleted": stats_row["total_links_deleted"],
-            "total_spam_deleted": stats_row["total_spam_deleted"],
-            "total_warnings": stats_row["total_warnings"],
-            "total_restrictions": stats_row["total_restrictions"],
-            "total_bans": stats_row["total_bans"],
+    pipeline = [
+        {
+            "$group": {
+                "_id": None,
+                "total_messages": {"$sum": "$total_messages_checked"},
+                "total_links_deleted": {"$sum": "$links_deleted"},
+                "total_spam_deleted": {"$sum": "$spam_deleted"},
+                "total_warnings": {"$sum": "$warnings_issued"},
+                "total_restrictions": {"$sum": "$restrictions_applied"},
+                "total_bans": {"$sum": "$banned_members"},
+            }
         }
+    ]
+    agg = list(db["chat_statistics"].aggregate(pipeline))
+    stats_data = agg[0] if agg else {}
+
+    return {
+        "active_groups": active_groups,
+        "active_channels": active_channels,
+        "total_registered_chats": total_chats,
+        "total_messages": int(stats_data.get("total_messages") or 0),
+        "total_links_deleted": int(stats_data.get("total_links_deleted") or 0),
+        "total_spam_deleted": int(stats_data.get("total_spam_deleted") or 0),
+        "total_warnings": int(stats_data.get("total_warnings") or 0),
+        "total_restrictions": int(stats_data.get("total_restrictions") or 0),
+        "total_bans": int(stats_data.get("total_bans") or 0),
+    }
 
 
 # =============================================================================
@@ -1369,136 +1159,148 @@ def save_or_update_business_connection(
     account_first_name: str | None = None,
     db_path: str | None = None,
 ) -> None:
-    """Save or update a Telegram Business connection record in SQLite."""
-    path = db_path or get_db_path()
+    """Save or update a Telegram Business connection record in MongoDB."""
+    db = get_db()
     now = time.time()
     enabled_int = 1 if is_enabled else 0
     can_reply_int = 1 if can_reply else 0
 
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO business_connections (
-                connection_id, user_id, user_chat_id, is_enabled, can_reply,
-                account_username, account_first_name, connected_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(connection_id) DO UPDATE SET
-                user_id = excluded.user_id,
-                user_chat_id = excluded.user_chat_id,
-                is_enabled = excluded.is_enabled,
-                can_reply = excluded.can_reply,
-                account_username = COALESCE(excluded.account_username, business_connections.account_username),
-                account_first_name = COALESCE(excluded.account_first_name, business_connections.account_first_name),
-                updated_at = excluded.updated_at
-            """,
-            (
-                connection_id,
-                user_id,
-                user_chat_id,
-                enabled_int,
-                can_reply_int,
-                account_username,
-                account_first_name,
-                now,
-                now,
-            ),
-        )
+    update_doc: dict[str, Any] = {
+        "$set": {
+            "user_id": user_id,
+            "user_chat_id": user_chat_id,
+            "is_enabled": enabled_int,
+            "can_reply": can_reply_int,
+            "updated_at": now,
+        },
+        "$setOnInsert": {
+            "connection_id": connection_id,
+            "connected_at": now,
+        },
+    }
+    if account_username:
+        update_doc["$set"]["account_username"] = account_username
+    if account_first_name:
+        update_doc["$set"]["account_first_name"] = account_first_name
 
-        # Ensure default settings exist for this user
-        cursor.execute(
-            """
-            INSERT INTO personal_reply_settings (
-                user_id, is_enabled, first_time_only, cooldown_seconds, daily_limit,
-                reply_delay_seconds, parse_mode, excluded_user_ids, welcome_message_enabled, updated_at
-            ) VALUES (?, 1, 1, 86400, 100, 0, 'HTML', '[]', 1, ?)
-            ON CONFLICT(user_id) DO NOTHING
-            """,
-            (user_id, now),
-        )
+    db["business_connections"].update_one(
+        {"connection_id": connection_id},
+        update_doc,
+        upsert=True,
+    )
 
-        # Ensure default template exists for this user
-        cursor.execute(
-            """
-            INSERT INTO personal_reply_templates (
-                user_id, template_name, content, is_active, created_at, updated_at
-            ) VALUES (?, 'default', ?, 1, ?, ?)
-            ON CONFLICT(user_id, template_name) DO NOTHING
-            """,
-            (user_id, DEFAULT_PERSONAL_REPLY_TEMPLATE, now, now),
-        )
+    # Ensure default settings exist for this user
+    db["personal_reply_settings"].update_one(
+        {"user_id": user_id},
+        {
+            "$setOnInsert": {
+                "user_id": user_id,
+                "is_enabled": 1,
+                "first_time_only": 1,
+                "cooldown_seconds": 86400,
+                "daily_limit": 100,
+                "reply_delay_seconds": 0,
+                "parse_mode": "HTML",
+                "excluded_user_ids": "[]",
+                "welcome_message_enabled": 1,
+                "initial_message_set": 0,
+                "updated_at": now,
+            }
+        },
+        upsert=True,
+    )
 
-        conn.commit()
+    # Ensure default template exists for this user
+    db["personal_reply_templates"].update_one(
+        {"user_id": user_id, "template_name": "default"},
+        {
+            "$setOnInsert": {
+                "user_id": user_id,
+                "template_name": "default",
+                "content": DEFAULT_PERSONAL_REPLY_TEMPLATE,
+                "is_active": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+        },
+        upsert=True,
+    )
 
 
 def get_business_connection(connection_id: str, db_path: str | None = None) -> dict[str, Any] | None:
     """Retrieve details of a business connection by its unique connection ID."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM business_connections WHERE connection_id = ?", (connection_id,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
+    db = get_db()
+    doc = db["business_connections"].find_one({"connection_id": connection_id})
+    if not doc:
+        return None
+    d = dict(doc)
+    d.pop("_id", None)
+    return d
 
 
 def get_user_business_connections(
     user_id: int, active_only: bool = False, db_path: str | None = None
 ) -> list[dict[str, Any]]:
     """Retrieve all business connections associated with a user."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        query = "SELECT * FROM business_connections WHERE user_id = ?"
-        params: list[Any] = [user_id]
-        if active_only:
-            query += " AND is_enabled = 1"
-        query += " ORDER BY updated_at DESC"
-        cursor.execute(query, params)
-        return [dict(row) for row in cursor.fetchall()]
+    db = get_db()
+    query: dict[str, Any] = {"user_id": user_id}
+    if active_only:
+        query["is_enabled"] = 1
+
+    cursor = db["business_connections"].find(query).sort("updated_at", DESCENDING)
+    results = []
+    for doc in cursor:
+        d = dict(doc)
+        d.pop("_id", None)
+        results.append(d)
+    return results
 
 
 def get_active_business_connection_for_user(user_id: int, db_path: str | None = None) -> dict[str, Any] | None:
     """Retrieve the most recent active business connection for a user."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM business_connections WHERE user_id = ? AND is_enabled = 1 ORDER BY updated_at DESC LIMIT 1",
-            (user_id,),
-        )
-        row = cursor.fetchone()
-        return dict(row) if row else None
+    db = get_db()
+    doc = db["business_connections"].find_one(
+        {"user_id": user_id, "is_enabled": 1},
+        sort=[("updated_at", DESCENDING)],
+    )
+    if not doc:
+        return None
+    d = dict(doc)
+    d.pop("_id", None)
+    return d
 
 
 def get_personal_reply_settings(user_id: int, db_path: str | None = None) -> dict[str, Any]:
     """Retrieve personal auto-reply configuration for a user, initializing defaults if absent."""
-    path = db_path or get_db_path()
+    db = get_db()
     now = time.time()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM personal_reply_settings WHERE user_id = ?", (user_id,))
-        row = cursor.fetchone()
-        if row:
-            return dict(row)
+    doc = db["personal_reply_settings"].find_one({"user_id": user_id})
+    if doc:
+        d = dict(doc)
+        d.pop("_id", None)
+        return d
 
-        # Initialize defaults
-        cursor.execute(
-            """
-            INSERT INTO personal_reply_settings (
-                user_id, is_enabled, first_time_only, cooldown_seconds, daily_limit,
-                reply_delay_seconds, parse_mode, excluded_user_ids, welcome_message_enabled, initial_message_set, updated_at
-            ) VALUES (?, 1, 1, 86400, 100, 0, 'HTML', '[]', 1, 0, ?)
-            """,
-            (user_id, now),
-        )
-        conn.commit()
-        cursor.execute("SELECT * FROM personal_reply_settings WHERE user_id = ?", (user_id,))
-        return dict(cursor.fetchone())
+    # Initialize defaults
+    default_doc = {
+        "user_id": user_id,
+        "is_enabled": 1,
+        "first_time_only": 1,
+        "cooldown_seconds": 86400,
+        "daily_limit": 100,
+        "reply_delay_seconds": 0,
+        "parse_mode": "HTML",
+        "excluded_user_ids": "[]",
+        "welcome_message_enabled": 1,
+        "initial_message_set": 0,
+        "updated_at": now,
+    }
+    db["personal_reply_settings"].insert_one(default_doc)
+    default_doc.pop("_id", None)
+    return default_doc
 
 
 def update_personal_reply_settings(user_id: int, db_path: str | None = None, **kwargs: Any) -> dict[str, Any]:
     """Update one or more settings in personal_reply_settings for a specific user."""
-    path = db_path or get_db_path()
     allowed_keys = {
         "is_enabled",
         "first_time_only",
@@ -1512,114 +1314,97 @@ def update_personal_reply_settings(user_id: int, db_path: str | None = None, **k
     }
     updates = {k: v for k, v in kwargs.items() if k in allowed_keys}
     if not updates:
-        return get_personal_reply_settings(user_id, db_path=path)
+        return get_personal_reply_settings(user_id)
 
-    # Ensure existing settings record
-    get_personal_reply_settings(user_id, db_path=path)
-
+    db = get_db()
     now = time.time()
-    set_clauses = [f"{k} = ?" for k in updates.keys()]
-    set_clauses.append("updated_at = ?")
-    values = list(updates.values())
-    values.append(now)
-    values.append(user_id)
+    updates["updated_at"] = now
 
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            f"UPDATE personal_reply_settings SET {', '.join(set_clauses)} WHERE user_id = ?",
-            values,
-        )
-        conn.commit()
-
-    return get_personal_reply_settings(user_id, db_path=path)
+    db["personal_reply_settings"].update_one(
+        {"user_id": user_id},
+        {"$set": updates},
+        upsert=True,
+    )
+    return get_personal_reply_settings(user_id)
 
 
 def get_personal_reply_template(
     user_id: int, template_name: str = "default", db_path: str | None = None
 ) -> str:
     """Retrieve custom reply template for a user. Guaranteed to never return another user's message."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT content FROM personal_reply_templates WHERE user_id = ? AND template_name = ? AND is_active = 1",
-            (user_id, template_name),
-        )
-        row = cursor.fetchone()
-        if row and row["content"]:
-            return row["content"]
-        return DEFAULT_PERSONAL_REPLY_TEMPLATE
+    db = get_db()
+    doc = db["personal_reply_templates"].find_one(
+        {"user_id": user_id, "template_name": template_name, "is_active": 1}
+    )
+    if doc and doc.get("content"):
+        return doc["content"]
+    return DEFAULT_PERSONAL_REPLY_TEMPLATE
 
 
 def set_personal_reply_template(
     user_id: int, content: str, template_name: str = "default", db_path: str | None = None
 ) -> None:
     """Save or update a personal auto-reply template for a specific user."""
-    path = db_path or get_db_path()
+    db = get_db()
     now = time.time()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO personal_reply_templates (
-                user_id, template_name, content, is_active, created_at, updated_at
-            ) VALUES (?, ?, ?, 1, ?, ?)
-            ON CONFLICT(user_id, template_name) DO UPDATE SET
-                content = excluded.content,
-                is_active = 1,
-                updated_at = excluded.updated_at
-            """,
-            (user_id, template_name, content.strip(), now, now),
-        )
-        conn.commit()
+    db["personal_reply_templates"].update_one(
+        {"user_id": user_id, "template_name": template_name},
+        {
+            "$set": {
+                "content": content.strip(),
+                "is_active": 1,
+                "updated_at": now,
+            },
+            "$setOnInsert": {
+                "created_at": now,
+            },
+        },
+        upsert=True,
+    )
 
 
 def reset_personal_reply_template(
     user_id: int, template_name: str = "default", db_path: str | None = None
 ) -> str:
     """Reset a user's reply template back to the default message."""
-    set_personal_reply_template(user_id, DEFAULT_PERSONAL_REPLY_TEMPLATE, template_name, db_path)
+    set_personal_reply_template(user_id, DEFAULT_PERSONAL_REPLY_TEMPLATE, template_name)
     return DEFAULT_PERSONAL_REPLY_TEMPLATE
 
 
 def has_user_set_initial_message(user_id: int, db_path: str | None = None) -> bool:
     """Check if the user has already configured their initial personal reply message."""
-    settings = get_personal_reply_settings(user_id, db_path=db_path)
+    settings = get_personal_reply_settings(user_id)
     return bool(settings.get("initial_message_set", 0))
 
 
 def set_user_initial_message_flag(user_id: int, is_set: bool = True, db_path: str | None = None) -> None:
     """Update the initial_message_set flag for a user."""
-    update_personal_reply_settings(user_id, initial_message_set=(1 if is_set else 0), db_path=db_path)
+    update_personal_reply_settings(user_id, initial_message_set=(1 if is_set else 0))
 
 
 def get_group_greeting_message(chat_id: int, db_path: str | None = None) -> str | None:
     """Retrieve the custom GC greeting message for a group, or None if default."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT custom_greeting_msg FROM chat_settings WHERE chat_id = ?", (chat_id,))
-        row = cursor.fetchone()
-        if row and row["custom_greeting_msg"]:
-            return row["custom_greeting_msg"]
-        return None
+    db = get_db()
+    doc = db["chat_settings"].find_one({"chat_id": chat_id})
+    if doc and doc.get("custom_greeting_msg"):
+        return doc["custom_greeting_msg"]
+    return None
 
 
 def set_group_greeting_message(chat_id: int, message: str | None, db_path: str | None = None) -> None:
     """Save or clear the custom GC greeting message for a group."""
-    update_group_text_setting(chat_id, "custom_greeting_msg", message.strip() if message else None, db_path=db_path)
+    update_group_text_setting(chat_id, "custom_greeting_msg", message.strip() if message else None)
 
 
 def get_group_greeting_enabled(chat_id: int, db_path: str | None = None) -> bool:
     """Check if greetings are enabled for a group."""
-    settings = get_group_settings(chat_id, db_path=db_path)
+    settings = get_group_settings(chat_id)
     return bool(settings.get("greeting_enabled", True))
 
 
 def set_group_greeting_enabled(chat_id: int, enabled: bool, db_path: str | None = None) -> None:
     """Toggle greeting replies for a group."""
-    update_group_feature(chat_id, "greeting_enabled", enabled, db_path=db_path)
+    update_group_feature(chat_id, "greeting_enabled", enabled)
 
 
 def check_and_claim_first_contact(
@@ -1631,45 +1416,43 @@ def check_and_claim_first_contact(
 ) -> bool:
     """
     Atomically detect first-time sender and claim reply rights.
-    Utilizes UNIQUE(business_user_id, sender_id) SQLite constraint to guarantee
+    Utilizes UNIQUE(business_user_id, sender_id) MongoDB index to guarantee
     zero duplicate replies even under high-concurrency race conditions.
     Returns True if sender is new and reply is claimed.
     Returns False if sender has previously contacted this business account.
     """
-    path = db_path or get_db_path()
+    db = get_db()
     now = time.time()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        # Attempt atomic insert for new contact
-        cursor.execute(
-            """
-            INSERT INTO business_first_contacts (
-                business_user_id, sender_id, sender_username, sender_first_name,
-                first_seen_at, last_seen_at, messages_count, replied, replied_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)
-            ON CONFLICT(business_user_id, sender_id) DO NOTHING
-            """,
-            (business_user_id, sender_id, sender_username, sender_first_name, now, now, now),
+    try:
+        db["business_first_contacts"].insert_one(
+            {
+                "business_user_id": business_user_id,
+                "sender_id": sender_id,
+                "sender_username": sender_username,
+                "sender_first_name": sender_first_name,
+                "first_seen_at": now,
+                "last_seen_at": now,
+                "messages_count": 1,
+                "replied": 1,
+                "replied_at": now,
+            }
         )
-        if cursor.rowcount > 0:
-            # First-time sender successfully detected and claimed!
-            conn.commit()
-            return True
-        else:
-            # Existing sender: update contact metadata without claiming a new reply
-            cursor.execute(
-                """
-                UPDATE business_first_contacts
-                SET last_seen_at = ?,
-                    messages_count = messages_count + 1,
-                    sender_username = COALESCE(?, sender_username),
-                    sender_first_name = COALESCE(?, sender_first_name)
-                WHERE business_user_id = ? AND sender_id = ?
-                """,
-                (now, sender_username, sender_first_name, business_user_id, sender_id),
-            )
-            conn.commit()
-            return False
+        return True
+    except DuplicateKeyError:
+        update_doc: dict[str, Any] = {
+            "$set": {"last_seen_at": now},
+            "$inc": {"messages_count": 1},
+        }
+        if sender_username:
+            update_doc["$set"]["sender_username"] = sender_username
+        if sender_first_name:
+            update_doc["$set"]["sender_first_name"] = sender_first_name
+
+        db["business_first_contacts"].update_one(
+            {"business_user_id": business_user_id, "sender_id": sender_id},
+            update_doc,
+        )
+        return False
 
 
 def check_and_claim_cooldown_reply(
@@ -1684,92 +1467,86 @@ def check_and_claim_cooldown_reply(
     Check if sender is eligible for reply under cooldown mode (when first_time_only is False).
     Atomically updates replied_at if cooldown has elapsed.
     """
-    path = db_path or get_db_path()
+    db = get_db()
     now = time.time()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT replied, replied_at FROM business_first_contacts WHERE business_user_id = ? AND sender_id = ?",
-            (business_user_id, sender_id),
+    doc = db["business_first_contacts"].find_one(
+        {"business_user_id": business_user_id, "sender_id": sender_id}
+    )
+
+    if not doc:
+        try:
+            db["business_first_contacts"].insert_one(
+                {
+                    "business_user_id": business_user_id,
+                    "sender_id": sender_id,
+                    "sender_username": sender_username,
+                    "sender_first_name": sender_first_name,
+                    "first_seen_at": now,
+                    "last_seen_at": now,
+                    "messages_count": 1,
+                    "replied": 1,
+                    "replied_at": now,
+                }
+            )
+            return True
+        except DuplicateKeyError:
+            doc = db["business_first_contacts"].find_one(
+                {"business_user_id": business_user_id, "sender_id": sender_id}
+            )
+
+    replied_at = float(doc.get("replied_at") or 0.0) if doc else 0.0
+    if (now - replied_at) >= cooldown_seconds:
+        update_doc: dict[str, Any] = {
+            "$set": {
+                "last_seen_at": now,
+                "replied": 1,
+                "replied_at": now,
+            },
+            "$inc": {"messages_count": 1},
+        }
+        if sender_username:
+            update_doc["$set"]["sender_username"] = sender_username
+        if sender_first_name:
+            update_doc["$set"]["sender_first_name"] = sender_first_name
+
+        db["business_first_contacts"].update_one(
+            {"business_user_id": business_user_id, "sender_id": sender_id},
+            update_doc,
         )
-        row = cursor.fetchone()
+        return True
+    else:
+        update_doc = {
+            "$set": {"last_seen_at": now},
+            "$inc": {"messages_count": 1},
+        }
+        if sender_username:
+            update_doc["$set"]["sender_username"] = sender_username
+        if sender_first_name:
+            update_doc["$set"]["sender_first_name"] = sender_first_name
 
-        if not row:
-            # First time seeing this user
-            cursor.execute(
-                """
-                INSERT INTO business_first_contacts (
-                    business_user_id, sender_id, sender_username, sender_first_name,
-                    first_seen_at, last_seen_at, messages_count, replied, replied_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 1, 1, ?)
-                """,
-                (business_user_id, sender_id, sender_username, sender_first_name, now, now, now),
-            )
-            conn.commit()
-            return True
-
-        replied_at = row["replied_at"] or 0
-        if (now - replied_at) >= cooldown_seconds:
-            # Cooldown passed, eligible for new reply
-            cursor.execute(
-                """
-                UPDATE business_first_contacts
-                SET last_seen_at = ?,
-                    messages_count = messages_count + 1,
-                    replied = 1,
-                    replied_at = ?,
-                    sender_username = COALESCE(?, sender_username),
-                    sender_first_name = COALESCE(?, sender_first_name)
-                WHERE business_user_id = ? AND sender_id = ?
-                """,
-                (now, now, sender_username, sender_first_name, business_user_id, sender_id),
-            )
-            conn.commit()
-            return True
-        else:
-            # Within cooldown, suppress reply
-            cursor.execute(
-                """
-                UPDATE business_first_contacts
-                SET last_seen_at = ?,
-                    messages_count = messages_count + 1,
-                    sender_username = COALESCE(?, sender_username),
-                    sender_first_name = COALESCE(?, sender_first_name)
-                WHERE business_user_id = ? AND sender_id = ?
-                """,
-                (now, sender_username, sender_first_name, business_user_id, sender_id),
-            )
-            conn.commit()
-            return False
+        db["business_first_contacts"].update_one(
+            {"business_user_id": business_user_id, "sender_id": sender_id},
+            update_doc,
+        )
+        return False
 
 
 def has_replied_to_sender(business_user_id: int, sender_id: int, db_path: str | None = None) -> bool:
     """Check if the business account has already delivered an auto-reply to this sender."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT replied FROM business_first_contacts WHERE business_user_id = ? AND sender_id = ?",
-            (business_user_id, sender_id),
-        )
-        row = cursor.fetchone()
-        return bool(row and row["replied"] == 1)
+    db = get_db()
+    doc = db["business_first_contacts"].find_one(
+        {"business_user_id": business_user_id, "sender_id": sender_id}
+    )
+    return bool(doc and doc.get("replied") == 1)
 
 
 def get_daily_replies_count(business_user_id: int, db_path: str | None = None) -> int:
     """Count auto-replies delivered by this business account in the last 24 hours."""
-    path = db_path or get_db_path()
+    db = get_db()
     cutoff = time.time() - 86400
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT COUNT(*) FROM business_reply_logs
-            WHERE business_user_id = ? AND sent_at >= ? AND status = 'success'
-            """,
-            (business_user_id, cutoff),
-        )
-        return cursor.fetchone()[0]
+    return db["business_reply_logs"].count_documents(
+        {"business_user_id": business_user_id, "sent_at": {"$gte": cutoff}, "status": "success"}
+    )
 
 
 def log_business_reply(
@@ -1784,123 +1561,95 @@ def log_business_reply(
     db_path: str | None = None,
 ) -> None:
     """Record a delivery or failure event in the business auto-reply logs."""
-    path = db_path or get_db_path()
+    db = get_db()
     now = time.time()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO business_reply_logs (
-                business_user_id, connection_id, chat_id, sender_id, message_id,
-                reply_text, sent_at, status, error_message
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                business_user_id,
-                connection_id,
-                chat_id,
-                sender_id,
-                message_id,
-                reply_text,
-                now,
-                status,
-                error_message,
-            ),
-        )
-        conn.commit()
+    next_id = get_next_sequence("business_reply_logs", db=db)
+    db["business_reply_logs"].insert_one(
+        {
+            "id": next_id,
+            "business_user_id": business_user_id,
+            "connection_id": connection_id,
+            "chat_id": chat_id,
+            "sender_id": sender_id,
+            "message_id": message_id,
+            "reply_text": reply_text,
+            "sent_at": now,
+            "status": status,
+            "error_message": error_message,
+        }
+    )
 
 
 def get_user_business_stats(user_id: int, db_path: str | None = None) -> dict[str, Any]:
     """Retrieve auto-reply usage and performance statistics for a specific user."""
-    path = db_path or get_db_path()
-    today_count = get_daily_replies_count(user_id, db_path=path)
+    db = get_db()
+    today_count = get_daily_replies_count(user_id)
 
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        # Total unique senders
-        cursor.execute("SELECT COUNT(*) FROM business_first_contacts WHERE business_user_id = ?", (user_id,))
-        total_contacts = cursor.fetchone()[0]
+    total_contacts = db["business_first_contacts"].count_documents({"business_user_id": user_id})
+    total_replies_all_time = db["business_reply_logs"].count_documents(
+        {"business_user_id": user_id, "status": "success"}
+    )
+    total_failed_replies = db["business_reply_logs"].count_documents(
+        {"business_user_id": user_id, "status": "failed"}
+    )
+    active_connections = db["business_connections"].count_documents(
+        {"user_id": user_id, "is_enabled": 1}
+    )
 
-        # Total successful replies all-time
-        cursor.execute(
-            "SELECT COUNT(*) FROM business_reply_logs WHERE business_user_id = ? AND status = 'success'",
-            (user_id,),
-        )
-        total_replies_all_time = cursor.fetchone()[0]
-
-        # Total failed replies
-        cursor.execute(
-            "SELECT COUNT(*) FROM business_reply_logs WHERE business_user_id = ? AND status = 'failed'",
-            (user_id,),
-        )
-        total_failed_replies = cursor.fetchone()[0]
-
-        # Active connections count
-        cursor.execute(
-            "SELECT COUNT(*) FROM business_connections WHERE user_id = ? AND is_enabled = 1",
-            (user_id,),
-        )
-        active_connections = cursor.fetchone()[0]
-
-        return {
-            "total_contacts": total_contacts,
-            "replies_today": today_count,
-            "total_replies_all_time": total_replies_all_time,
-            "total_failed_replies": total_failed_replies,
-            "active_connections": active_connections,
-        }
+    return {
+        "total_contacts": total_contacts,
+        "replies_today": today_count,
+        "total_replies_all_time": total_replies_all_time,
+        "total_failed_replies": total_failed_replies,
+        "active_connections": active_connections,
+    }
 
 
 def get_global_business_stats(db_path: str | None = None) -> dict[str, Any]:
     """Retrieve platform-wide aggregate business auto-reply statistics for bot owners."""
-    path = db_path or get_db_path()
-    with get_connection(path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(DISTINCT user_id) FROM business_connections")
-        total_connected_users = cursor.fetchone()[0]
+    db = get_db()
+    distinct_users = db["business_connections"].distinct("user_id")
+    total_connected_users = len(distinct_users)
+    total_active_connections = db["business_connections"].count_documents({"is_enabled": 1})
+    total_contacts_tracked = db["business_first_contacts"].count_documents({})
+    total_replies_delivered = db["business_reply_logs"].count_documents({"status": "success"})
 
-        cursor.execute("SELECT COUNT(*) FROM business_connections WHERE is_enabled = 1")
-        total_active_connections = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM business_first_contacts")
-        total_contacts_tracked = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM business_reply_logs WHERE status = 'success'")
-        total_replies_delivered = cursor.fetchone()[0]
-
-        return {
-            "total_connected_users": total_connected_users,
-            "total_active_connections": total_active_connections,
-            "total_contacts_tracked": total_contacts_tracked,
-            "total_replies_delivered": total_replies_delivered,
-        }
+    return {
+        "total_connected_users": total_connected_users,
+        "total_active_connections": total_active_connections,
+        "total_contacts_tracked": total_contacts_tracked,
+        "total_replies_delivered": total_replies_delivered,
+    }
 
 
 def get_excluded_users_list(user_id: int, db_path: str | None = None) -> list[str | int]:
     """Get the list of excluded user IDs or usernames for a specific business user."""
-    settings = get_personal_reply_settings(user_id, db_path=db_path)
+    settings = get_personal_reply_settings(user_id)
+    raw = settings.get("excluded_user_ids", "[]")
+    if isinstance(raw, list):
+        return raw
     try:
-        return json.loads(settings.get("excluded_user_ids", "[]"))
+        return json.loads(raw)
     except Exception:
         return []
 
 
 def add_excluded_user(user_id: int, target: str | int, db_path: str | None = None) -> list[str | int]:
     """Add a user ID or @username to a user's excluded auto-reply list."""
-    current = get_excluded_users_list(user_id, db_path=db_path)
+    current = get_excluded_users_list(user_id)
     val = int(target) if str(target).lstrip("-").isdigit() else str(target).strip().lstrip("@").lower()
     if val not in current:
         current.append(val)
-        update_personal_reply_settings(user_id, excluded_user_ids=json.dumps(current), db_path=db_path)
+        update_personal_reply_settings(user_id, excluded_user_ids=json.dumps(current))
     return current
 
 
 def remove_excluded_user(user_id: int, target: str | int, db_path: str | None = None) -> list[str | int]:
     """Remove a user ID or @username from a user's excluded auto-reply list."""
-    current = get_excluded_users_list(user_id, db_path=db_path)
+    current = get_excluded_users_list(user_id)
     val = int(target) if str(target).lstrip("-").isdigit() else str(target).strip().lstrip("@").lower()
     updated = [x for x in current if x != val]
-    update_personal_reply_settings(user_id, excluded_user_ids=json.dumps(updated), db_path=db_path)
+    update_personal_reply_settings(user_id, excluded_user_ids=json.dumps(updated))
     return updated
 
 
@@ -1908,7 +1657,7 @@ def is_user_excluded(
     user_id: int, target_user_id: int, target_username: str | None = None, db_path: str | None = None
 ) -> bool:
     """Check if a target user ID or username is excluded from receiving auto-replies."""
-    excluded = get_excluded_users_list(user_id, db_path=db_path)
+    excluded = get_excluded_users_list(user_id)
     if target_user_id in excluded:
         return True
     if target_username and target_username.lower().lstrip("@") in [str(x).lower().lstrip("@") for x in excluded]:

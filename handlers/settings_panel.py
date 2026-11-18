@@ -12,10 +12,13 @@ from telegram.constants import ChatType, ParseMode
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from database import (
+    get_abuse_custom_keywords,
+    get_abuse_moderation_logs,
     get_group_settings,
     get_group_stats,
     get_recent_moderation_logs,
     get_whitelisted_domains,
+    update_abuse_settings,
     update_group_feature,
     update_group_numeric_setting,
 )
@@ -37,6 +40,7 @@ def build_main_settings_markup(chat_id: int, settings: dict) -> tuple[str, Inlin
     join_status = "ON 🟢" if settings.get("anti_join_spam_enabled", False) else "OFF 🔴"
     bot_status = "ON 🟢" if settings.get("anti_bot_enabled", False) else "OFF 🔴"
     media_status = "ON 🟢" if settings.get("media_restrictions_enabled", False) else "OFF 🔴"
+    abuse_status = "ON 🟢" if settings.get("abuse_detection_enabled", True) else "OFF 🔴"
 
     text = (
         f"⚙️ <b>WAGURI GROUP MANAGEMENT</b>\n\n"
@@ -47,7 +51,11 @@ def build_main_settings_markup(chat_id: int, settings: dict) -> tuple[str, Inlin
     )
 
     keyboard = [
-        # Moderation Toggles
+        # Abuse & Anti-Link Protection Toggles
+        [
+            InlineKeyboardButton(f"🚨 Abuse Shield: {abuse_status}", callback_data=f"cfg:{chat_id}:toggle_abuse"),
+            InlineKeyboardButton("🛡️ Abuse Settings", callback_data=f"cfg:{chat_id}:menu_abuse"),
+        ],
         [
             InlineKeyboardButton(f"🔗 Anti-Link: {link_status}", callback_data=f"cfg:{chat_id}:toggle_link"),
             InlineKeyboardButton(f"🛡️ Anti-Spam: {spam_status}", callback_data=f"cfg:{chat_id}:toggle_spam"),
@@ -209,6 +217,137 @@ def build_logs_markup(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
     return text, InlineKeyboardMarkup(keyboard)
 
 
+# =============================================================================
+# Abuse Settings Sub-Menus
+# =============================================================================
+
+def build_abuse_settings_markup(chat_id: int, settings: dict) -> tuple[str, InlineKeyboardMarkup]:
+    """Sub-menu to configure detailed Abuse detection categories and controls."""
+    chat_title = html.escape(settings.get("chat_title") or "Current Group")
+    abuse_on = "ON 🟢" if settings.get("abuse_detection_enabled", True) else "OFF 🔴"
+    sexual_on = "ON 🟢" if settings.get("abuse_sexual_language", True) else "OFF 🔴"
+    general_on = "ON 🟢" if settings.get("abuse_general_language", True) else "OFF 🔴"
+    hindi_on = "ON 🟢" if settings.get("abuse_hindi_hinglish", True) else "OFF 🔴"
+    harass_on = "ON 🟢" if settings.get("abuse_harassment", True) else "OFF 🔴"
+    threat_on = "ON 🟢" if settings.get("abuse_threats", True) else "OFF 🔴"
+    bypass_on = "ON 🟢" if settings.get("abuse_bypass_detection", True) else "OFF 🔴"
+    warn_on = "ON 🟢" if settings.get("abuse_warning_system", True) else "OFF 🔴"
+    mute_mins = settings.get("abuse_mute_duration_minutes", 30)
+    warn_lim = settings.get("abuse_warning_limit", 3)
+
+    text = (
+        f"🚨 <b>Abuse Moderation Controls</b>\n\n"
+        f"👥 <b>Group:</b> {chat_title}\n"
+        f"🆔 <b>Chat ID:</b> <code>{chat_id}</code>\n\n"
+        f"Tap any category below to enable/disable protection or adjust thresholds:"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton(f"🚨 Master Shield: {abuse_on}", callback_data=f"cfg:{chat_id}:toggle_abuse"),
+        ],
+        [
+            InlineKeyboardButton(f"🔞 Sexual: {sexual_on}", callback_data=f"cfg:{chat_id}:toggle_abuse_sexual"),
+            InlineKeyboardButton(f"🤬 General: {general_on}", callback_data=f"cfg:{chat_id}:toggle_abuse_general"),
+        ],
+        [
+            InlineKeyboardButton(f"🇮🇳 Hindi: {hindi_on}", callback_data=f"cfg:{chat_id}:toggle_abuse_hindi"),
+            InlineKeyboardButton(f"🛑 Harassment: {harass_on}", callback_data=f"cfg:{chat_id}:toggle_abuse_harass"),
+        ],
+        [
+            InlineKeyboardButton(f"🔪 Threats: {threat_on}", callback_data=f"cfg:{chat_id}:toggle_abuse_threat"),
+            InlineKeyboardButton(f"🛡 Bypass Shield: {bypass_on}", callback_data=f"cfg:{chat_id}:toggle_abuse_bypass"),
+        ],
+        [
+            InlineKeyboardButton(f"⚠️ Warnings: {warn_on}", callback_data=f"cfg:{chat_id}:toggle_abuse_warn"),
+            InlineKeyboardButton(f"⏱ Mute ({mute_mins}m)", callback_data=f"cfg:{chat_id}:menu_abuse_mute"),
+        ],
+        [
+            InlineKeyboardButton("📝 Custom Keywords", callback_data=f"cfg:{chat_id}:menu_abuse_words"),
+            InlineKeyboardButton("📋 Abuse Logs", callback_data=f"cfg:{chat_id}:menu_abuse_logs"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Back to Main Panel", callback_data=f"cfg:{chat_id}:main"),
+        ],
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_abuse_mute_markup(chat_id: int, settings: dict) -> tuple[str, InlineKeyboardMarkup]:
+    """Sub-menu to choose default mute duration on repeat abuse offenses."""
+    cur_mute = settings.get("abuse_mute_duration_minutes", 30)
+    text = (
+        f"⏱ <b>Abuse Temporary Mute Duration</b>\n\n"
+        f"<b>Current Mute Duration:</b> <code>{cur_mute} minutes</code>\n\n"
+        f"When a member exceeds the warning threshold for abusive messages, "
+        f"they will be restricted from messaging for this duration.\n\n"
+        f"Select a new mute duration:"
+    )
+    durations = [15, 30, 60, 120, 1440]
+    keyboard = []
+    row = []
+    for d in durations:
+        label = f"{d}m" if d < 60 else (f"{d//60}h" if d < 1440 else "24h")
+        btn_text = f"✅ {label}" if d == cur_mute else label
+        row.append(InlineKeyboardButton(btn_text, callback_data=f"cfg:{chat_id}:set_abuse_mute:{d}"))
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Abuse Settings", callback_data=f"cfg:{chat_id}:menu_abuse")])
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_abuse_words_markup(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Sub-menu displaying custom blocked and whitelisted keywords for Abuse moderation."""
+    blocked, allowed = get_abuse_custom_keywords(chat_id)
+    text = f"📝 <b>Custom Abuse Keywords</b>\n\n"
+    if not blocked and not allowed:
+        text += "No custom keywords configured for this group.\n\n"
+    else:
+        text += f"🚫 <b>Blocked Keywords ({len(blocked)}):</b>\n"
+        if blocked:
+            for b in blocked[:10]:
+                text += f"• <code>{html.escape(b)}</code>\n"
+        else:
+            text += "<i>None</i>\n"
+
+        text += f"\n✅ <b>Whitelisted Keywords ({len(allowed)}):</b>\n"
+        if allowed:
+            for a in allowed[:10]:
+                text += f"• <code>{html.escape(a)}</code>\n"
+        else:
+            text += "<i>None</i>\n"
+
+    text += "\n<i>To manage words, use:</i>\n<code>/abuse addword &lt;word&gt;</code>\n<code>/abuse removeword &lt;word&gt;</code>"
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Back to Abuse Settings", callback_data=f"cfg:{chat_id}:menu_abuse")],
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
+
+
+def build_abuse_logs_markup(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Sub-menu displaying recent abuse moderation actions."""
+    logs = get_abuse_moderation_logs(chat_id, limit=8)
+    if not logs:
+        text = "📋 <b>Recent Abuse Moderation Logs</b>\n\nNo abuse moderation actions recorded yet for this group."
+    else:
+        text = "📋 <b>Recent Abuse Moderation Logs</b>\n\n"
+        for entry in logs:
+            dt = datetime.fromtimestamp(entry["timestamp"], tz=timezone.utc).strftime("%m-%d %H:%M")
+            action = html.escape(entry["action"])
+            details = html.escape(entry["details"])
+            uid = entry["user_id"]
+            text += f"• <b>[{dt}]</b> {action} | User: <code>{uid}</code>\n  <i>{details}</i>\n"
+
+    keyboard = [
+        [InlineKeyboardButton("🔄 Refresh Logs", callback_data=f"cfg:{chat_id}:menu_abuse_logs")],
+        [InlineKeyboardButton("⬅️ Back to Abuse Settings", callback_data=f"cfg:{chat_id}:menu_abuse")],
+    ]
+    return text, InlineKeyboardMarkup(keyboard)
+
+
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /settings by displaying the interactive moderation dashboard."""
     message = update.effective_message
@@ -332,7 +471,109 @@ async def settings_callback_handler(update: Update, context: ContextTypes.DEFAUL
         status_str = "ENABLED" if new_val else "DISABLED"
         await query.answer(f"Media Filter is now {status_str}")
 
+    elif action == "toggle_abuse":
+        new_val = not settings.get("abuse_detection_enabled", True)
+        update_group_feature(target_chat_id, "abuse_detection_enabled", new_val)
+        update_abuse_settings(target_chat_id, abuse_detection_enabled=new_val)
+        status_str = "ENABLED" if new_val else "DISABLED"
+        await query.answer(f"Abuse Shield is now {status_str}")
+
+    elif action == "toggle_abuse_sexual":
+        new_val = not settings.get("abuse_sexual_language", True)
+        update_abuse_settings(target_chat_id, abuse_sexual_language=new_val)
+        fresh_settings = get_group_settings(target_chat_id)
+        text, markup = build_abuse_settings_markup(target_chat_id, fresh_settings)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer(f"Sexual Language Filter {'ENABLED' if new_val else 'DISABLED'}")
+        return
+
+    elif action == "toggle_abuse_general":
+        new_val = not settings.get("abuse_general_language", True)
+        update_abuse_settings(target_chat_id, abuse_general_language=new_val)
+        fresh_settings = get_group_settings(target_chat_id)
+        text, markup = build_abuse_settings_markup(target_chat_id, fresh_settings)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer(f"General Abuse Filter {'ENABLED' if new_val else 'DISABLED'}")
+        return
+
+    elif action == "toggle_abuse_hindi":
+        new_val = not settings.get("abuse_hindi_hinglish", True)
+        update_abuse_settings(target_chat_id, abuse_hindi_hinglish=new_val)
+        fresh_settings = get_group_settings(target_chat_id)
+        text, markup = build_abuse_settings_markup(target_chat_id, fresh_settings)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer(f"Hindi/Hinglish Filter {'ENABLED' if new_val else 'DISABLED'}")
+        return
+
+    elif action == "toggle_abuse_harass":
+        new_val = not settings.get("abuse_harassment", True)
+        update_abuse_settings(target_chat_id, abuse_harassment=new_val)
+        fresh_settings = get_group_settings(target_chat_id)
+        text, markup = build_abuse_settings_markup(target_chat_id, fresh_settings)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer(f"Harassment Filter {'ENABLED' if new_val else 'DISABLED'}")
+        return
+
+    elif action == "toggle_abuse_threat":
+        new_val = not settings.get("abuse_threats", True)
+        update_abuse_settings(target_chat_id, abuse_threats=new_val)
+        fresh_settings = get_group_settings(target_chat_id)
+        text, markup = build_abuse_settings_markup(target_chat_id, fresh_settings)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer(f"Threat Detection {'ENABLED' if new_val else 'DISABLED'}")
+        return
+
+    elif action == "toggle_abuse_bypass":
+        new_val = not settings.get("abuse_bypass_detection", True)
+        update_abuse_settings(target_chat_id, abuse_bypass_detection=new_val)
+        fresh_settings = get_group_settings(target_chat_id)
+        text, markup = build_abuse_settings_markup(target_chat_id, fresh_settings)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer(f"Bypass Shield {'ENABLED' if new_val else 'DISABLED'}")
+        return
+
+    elif action == "toggle_abuse_warn":
+        new_val = not settings.get("abuse_warning_system", True)
+        update_abuse_settings(target_chat_id, abuse_warning_system=new_val)
+        fresh_settings = get_group_settings(target_chat_id)
+        text, markup = build_abuse_settings_markup(target_chat_id, fresh_settings)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer(f"Abuse Warning System {'ENABLED' if new_val else 'DISABLED'}")
+        return
+
     # Sub-menus
+    elif action == "menu_abuse":
+        text, markup = build_abuse_settings_markup(target_chat_id, settings)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer()
+        return
+
+    elif action == "menu_abuse_mute":
+        text, markup = build_abuse_mute_markup(target_chat_id, settings)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer()
+        return
+
+    elif action == "set_abuse_mute" and len(parts) >= 4:
+        mute_m = int(parts[3])
+        update_abuse_settings(target_chat_id, abuse_mute_duration_minutes=mute_m)
+        settings["abuse_mute_duration_minutes"] = mute_m
+        text, markup = build_abuse_mute_markup(target_chat_id, settings)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer(f"Abuse mute duration set to {mute_m} minutes.")
+        return
+
+    elif action == "menu_abuse_words":
+        text, markup = build_abuse_words_markup(target_chat_id)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer()
+        return
+
+    elif action == "menu_abuse_logs":
+        text, markup = build_abuse_logs_markup(target_chat_id)
+        await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        await query.answer()
+        return
     elif action == "menu_spam":
         text, markup = build_spam_settings_markup(target_chat_id, settings)
         await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)

@@ -69,6 +69,7 @@ ADMIN_COMMANDS: list[BotCommand] = [
     BotCommand("antibiolink", "Toggle bio link protection"),
     BotCommand("cleanservice", "Clean service messages (joins, leaves)"),
     BotCommand("antispam", "Toggle repeated-message spam detection"),
+    BotCommand("abuse", "Abuse Detection & Auto-Moderation System"),
 ]
 
 

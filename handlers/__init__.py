@@ -98,6 +98,11 @@ from handlers.help_menu import (
 )
 from handlers.command_menu import setup_command_menu
 from handlers.error_handler import error_handler
+from handlers.abuse_handler import (
+    abuse_command,
+    handle_abuse_message,
+    register_abuse_handlers,
+)
 from handlers.personal_autoreply import (
     autoreply_off_command,
     autoreply_on_command,
@@ -153,6 +158,9 @@ def register_all_handlers(application: Application) -> None:
     register_bot_owner_handlers(application)
 
     # Group 1: Automatic Anti-Link Protection (Groups and Channels) - handlers are registered inside register_anti_link_handlers
+    # Group 1: Automatic Abuse Detection & Auto-Moderation (Groups)
+    register_abuse_handlers(application)
+
     # Group 2: Automatic Repeated Message Spam & Flood Detection (Groups)
     register_anti_spam_handlers(application)
 
