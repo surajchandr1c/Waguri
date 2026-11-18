@@ -43,7 +43,11 @@ from database import (
     update_abuse_settings,
 )
 from handlers.admin_check import invalidate_cache
-from handlers.abuse_handler import abuse_command, handle_abuse_message
+from handlers.abuse_handler import (
+    _processed_messages,
+    abuse_command,
+    handle_abuse_message,
+)
 from handlers.commands import help_command, start
 from moderation.abuse import AbuseAction, get_abuse_detector
 
@@ -51,15 +55,17 @@ from moderation.abuse import AbuseAction, get_abuse_detector
 class TestAbuseDetectionSuite(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         invalidate_cache()
+        _processed_messages.clear()
         self.detector = get_abuse_detector()
         self.test_chat_id = -1009988776655
         self.test_user_id = 123456789
         self.admin_user_id = 987654321
         reset_user_abuse_warnings(self.test_chat_id, self.test_user_id)
-        update_abuse_settings(self.test_chat_id, abuse_detection_enabled=True)
+        update_abuse_settings(self.test_chat_id, abuse_detection_enabled=True, abuse_exempt_admins=False)
 
     def tearDown(self):
         invalidate_cache()
+        _processed_messages.clear()
         reset_user_abuse_warnings(self.test_chat_id, self.test_user_id)
 
     def create_mock_update(
@@ -237,12 +243,20 @@ class TestAbuseDetectionSuite(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(res.is_abusive)
         self.assertEqual(res.action, AbuseAction.ALLOW)
 
-    # 14. Group administrators should be exempted from moderation
+    # 14. Group administrators should be exempted from moderation when exempt_admins is enabled
     async def test_14_admin_exemptions(self):
+        update_abuse_settings(self.test_chat_id, abuse_exempt_admins=True)
         update, context = self.create_mock_update(text="you are a madarchod", is_admin=True)
         await handle_abuse_message(update, context)
-        # Message delete should NOT be called for an admin
+        # Message delete should NOT be called for an exempt admin
         update.effective_message.delete.assert_not_called()
+
+    # 14b. Abusive words are deleted by default (even during testing)
+    async def test_14b_abusive_words_deleted_by_default(self):
+        update_abuse_settings(self.test_chat_id, abuse_exempt_admins=False)
+        update, context = self.create_mock_update(text="you are a madarchod", is_admin=True)
+        await handle_abuse_message(update, context)
+        update.effective_message.delete.assert_called_once()
 
     # 15. Normal members cannot modify settings
     async def test_15_non_admin_cannot_change_settings(self):
@@ -304,6 +318,36 @@ class TestAbuseDetectionSuite(unittest.IsolatedAsyncioTestCase):
         update2, context2 = self.create_mock_update(text="/help", is_admin=False)
         await help_command(update2, context2)
         self.assertTrue(update2.effective_message.reply_text.called or context2.bot.send_message.called)
+
+    # 21. 1st violation issues warning, 2nd violation mutes user according to set time
+    async def test_21_first_violation_warns_second_violation_mutes(self):
+        reset_user_abuse_warnings(self.test_chat_id, self.test_user_id)
+        update_abuse_settings(self.test_chat_id, abuse_mute_duration_minutes=45, abuse_warning_limit=1)
+
+        # 1st violation
+        update1, context1 = self.create_mock_update(text="you are a madarchod", is_admin=False, message_id=1001)
+        await handle_abuse_message(update1, context1)
+
+        # 1st time: message deleted + warning notice sent + NOT muted yet
+        update1.effective_message.delete.assert_called_once()
+        self.assertTrue(context1.bot.send_message.called)
+        sent_warn_text = context1.bot.send_message.call_args[1].get("text") or context1.bot.send_message.call_args[0][1]
+        self.assertIn("Warning [1/2]", sent_warn_text)
+        context1.bot.restrict_chat_member.assert_not_called()
+
+        # 2nd violation
+        update2, context2 = self.create_mock_update(text="fuck you", is_admin=False, message_id=1002)
+        await handle_abuse_message(update2, context2)
+
+        # 2nd time: message deleted + user MUTED according to set time (45 mins)
+        update2.effective_message.delete.assert_called_once()
+        context2.bot.restrict_chat_member.assert_called_once()
+        restrict_call = context2.bot.restrict_chat_member.call_args
+        self.assertEqual(restrict_call[1]["chat_id"], self.test_chat_id)
+        self.assertEqual(restrict_call[1]["user_id"], self.test_user_id)
+        # Check until_date is roughly 45 minutes from now
+        until = restrict_call[1]["until_date"]
+        self.assertAlmostEqual(until, time.time() + (45 * 60), delta=10)
 
 
 if __name__ == "__main__":

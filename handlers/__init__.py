@@ -157,9 +157,10 @@ def register_all_handlers(application: Application) -> None:
     # Group 0: Super-Admin Bot Owner Control Panel (/owner)
     register_bot_owner_handlers(application)
 
-    # Group 1: Automatic Anti-Link Protection (Groups and Channels) - handlers are registered inside register_anti_link_handlers
-    # Group 1: Automatic Abuse Detection & Auto-Moderation (Groups)
+    # Group -1 (auto-moderation) & Group 0 (command): Automatic Abuse Detection & Auto-Moderation (Groups)
     register_abuse_handlers(application)
+
+    # Group 1: Automatic Anti-Link Protection (Groups and Channels) - handlers are registered inside register_anti_link_handlers
 
     # Group 2: Automatic Repeated Message Spam & Flood Detection (Groups)
     register_anti_spam_handlers(application)

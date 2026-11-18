@@ -23,7 +23,14 @@ from typing import Dict, Optional, Set, Tuple
 from telegram import Chat, ChatPermissions, Message, Update, User
 from telegram.constants import ChatMemberStatus, ChatType, ParseMode
 from telegram.error import BadRequest, Forbidden, TelegramError
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    ApplicationHandlerStop,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from database import (
     add_abuse_custom_keyword,
@@ -65,8 +72,8 @@ MUTE_PERMISSIONS = ChatPermissions(
 # Concurrency locks: (chat_id, user_id) -> asyncio.Lock
 _user_locks: Dict[Tuple[int, int], asyncio.Lock] = {}
 
-# Processed message cache to prevent duplicate processing / double warnings: (chat_id, message_id) -> timestamp
-_processed_messages: Dict[Tuple[int, int], float] = {}
+# Processed message cache to prevent duplicate processing / double warnings: (chat_id, message_id, text_sig) -> timestamp
+_processed_messages: Dict[Tuple[int, int, str], float] = {}
 PROCESSED_MSG_TTL = 300.0  # 5 minutes
 
 
@@ -78,10 +85,11 @@ def _get_user_lock(chat_id: int, user_id: int) -> asyncio.Lock:
     return _user_locks[key]
 
 
-def _is_message_already_processed(chat_id: int, message_id: int) -> bool:
-    """Check and record whether a message has already been processed."""
+def _is_message_already_processed(chat_id: int, message_id: int, text: str = "") -> bool:
+    """Check and record whether a message with given text has already been processed."""
     now = time.time()
-    key = (chat_id, message_id)
+    text_sig = str(hash(text[:100])) if text else ""
+    key = (chat_id, message_id, text_sig)
 
     # Clean old cache entries occasionally
     if len(_processed_messages) > 1000:
@@ -146,7 +154,7 @@ async def handle_abuse_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     # Check and update processed message cache to prevent duplicate triggers
-    if _is_message_already_processed(chat.id, message.message_id):
+    if _is_message_already_processed(chat.id, message.message_id, text):
         return
 
     # Load group moderation settings
@@ -160,7 +168,9 @@ async def handle_abuse_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # 1. Administrator & Owner Exemption Checks
     sender_chat = getattr(message, "sender_chat", None)
     is_admin = await is_sender_admin_or_owner(chat, sender, sender_chat, context.bot)
-    if is_admin:
+    exempt_admins = settings.get("abuse_exempt_admins", False)
+    if is_admin and exempt_admins:
+        logger.info("[ABUSE SKIPPED] Admin %s is exempt by group settings.", sender.id if sender else 0)
         return
 
     # 2. Check trusted user exemptions
@@ -188,18 +198,6 @@ async def handle_abuse_message(update: Update, context: ContextTypes.DEFAULT_TYP
     lock = _get_user_lock(chat.id, user_id)
 
     async with lock:
-        # Check bot permissions (needs delete messages permission)
-        can_delete, can_restrict = await check_bot_permissions(
-            chat, context.bot, need_delete=True, need_restrict=False
-        )
-        if not can_delete:
-            logger.warning(
-                "[ABUSE SKIPPED] Cannot delete abusive message in chat '%s' (%s): Missing Delete permission.",
-                chat.title,
-                chat.id,
-            )
-            return
-
         # 4. Delete the violating message
         chat_title = chat.title or "Unnamed Group"
         try:
@@ -223,15 +221,15 @@ async def handle_abuse_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 result.matched_terms,
             )
         except (Forbidden, BadRequest) as exc:
-            logger.error("[ABUSE DELETE ERROR] Could not delete message %s: %s", message.message_id, exc)
+            logger.error("[ABUSE DELETE ERROR] Could not delete message %s: %s. Waguri needs 'Delete Messages' admin permission.", message.message_id, exc)
             return
 
-        # 5. Warning & Escalation System
+        # 5. Warning & Escalation System (1 warning -> 2nd time mute according to set time)
         if not settings.get("abuse_warning_system", True):
             return
 
         # Record warning in database
-        warn_limit = int(settings.get("abuse_warning_limit") or 3)
+        warn_limit = int(settings.get("abuse_warning_limit") or 1)
         warn_num = add_user_abuse_warning(
             chat_id=chat.id,
             user_id=user_id,
@@ -249,16 +247,22 @@ async def handle_abuse_message(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         cat_display = result.category.replace("_", " ").title()
 
-        # Check if mute should be triggered (exceeded warn_limit or high severity)
-        should_mute = (warn_num > warn_limit) or (result.action == AbuseAction.MUTE_HEAVY)
+        mute_base_mins = int(settings.get("abuse_mute_duration_minutes") or 30)
+        mute_duration_sec = mute_base_mins * 60
+        duration_str = format_duration(mute_duration_sec)
+
+        # User requirement:
+        # 1st time: give the user a warning
+        # 2nd time: mute the user according to the set time
+        should_mute = (warn_num >= 2) or (warn_num > warn_limit)
 
         if not should_mute:
-            # Issue warning notice
+            # 1st Violation: Issue Warning Notice
             warn_msg_text = (
-                f"🚨 <b>Abuse Moderation Warning [{warn_num}/{warn_limit}]</b>\n\n"
+                f"🚨 <b>Abuse Moderation Warning [1/2]</b>\n\n"
                 f"👤 <b>Member:</b> {sender_mention}\n"
-                f"🚫 <b>Violation:</b> {cat_display} is prohibited in this group.\n"
-                f"⚠️ <i>Your message was removed. Continued violations will result in an automated mute.</i>"
+                f"🚫 <b>Violation:</b> {cat_display} is strictly prohibited in this group.\n"
+                f"⚠️ <i>Your message was removed. If you send abusive language a 2nd time, you will be muted for {duration_str}.</i>"
             )
             try:
                 sent_warn = await context.bot.send_message(
@@ -272,62 +276,65 @@ async def handle_abuse_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 logger.debug("[ABUSE WARN SEND ERROR] Could not send warning: %s", exc)
 
         else:
-            # Apply escalating temporary mute
-            mute_base_mins = int(settings.get("abuse_mute_duration_minutes") or 30)
-            if warn_num <= warn_limit + 1:
-                mute_duration_sec = mute_base_mins * 60  # e.g., 30m
-            elif warn_num == warn_limit + 2:
-                mute_duration_sec = max(7200, mute_base_mins * 60 * 2)  # e.g., 2 hours
+            # 2nd Violation (or above): Mute user according to set time
+            if is_admin:
+                admin_warn_text = (
+                    f"⚠️ <b>Abuse Warning [{warn_num}]</b>\n\n"
+                    f"👤 <b>Member:</b> {sender_mention} (Admin)\n"
+                    f"🚫 <i>Abusive message deleted. Note: Group administrators cannot be muted by Telegram, but violations are logged.</i>"
+                )
+                try:
+                    sent_notice = await context.bot.send_message(
+                        chat_id=chat.id,
+                        text=admin_warn_text,
+                        parse_mode=ParseMode.HTML,
+                    )
+                    asyncio.create_task(schedule_warning_cleanup(sent_notice, 10))
+                except Exception:
+                    pass
             else:
-                mute_duration_sec = 86400  # 24 hours
+                until_date = int(time.time()) + mute_duration_sec
+                try:
+                    await context.bot.restrict_chat_member(
+                        chat_id=chat.id,
+                        user_id=user_id,
+                        permissions=MUTE_PERMISSIONS,
+                        until_date=until_date,
+                    )
+                    record_restriction(
+                        chat_id=chat.id,
+                        user_id=user_id,
+                        username=sender.username if sender else None,
+                        reason=f"Abuse detection: {result.reason} (Violation #{warn_num})",
+                        restricted_at=time.time(),
+                        expires_at=until_date,
+                        action="mute",
+                    )
+                    increment_stat(chat.id, "restrictions_applied", count=1, chat_title=chat_title)
+                    log_moderation_event(
+                        chat.id,
+                        user_id,
+                        "ABUSE_MUTED",
+                        f"Muted for {duration_str} following violation #{warn_num} ({cat_display})",
+                    )
 
-            # Check if bot can restrict
-            _, can_restrict = await check_bot_permissions(chat, context.bot, need_delete=False, need_restrict=True)
-            if not can_restrict:
-                logger.warning("[ABUSE MUTE ERROR] Waguri missing 'Restrict Members' permission in chat %s", chat.id)
-                return
+                    mute_msg_text = (
+                        f"⛔️ <b>Member Muted for Abusive Language</b>\n\n"
+                        f"👤 <b>Member:</b> {sender_mention}\n"
+                        f"⏱ <b>Mute Duration:</b> {duration_str}\n"
+                        f"🚫 <b>Reason:</b> 2nd abuse violation ({cat_display}).\n"
+                        f"<i>Messaging permissions will be restored automatically after {duration_str}.</i>"
+                    )
+                    sent_mute = await context.bot.send_message(
+                        chat_id=chat.id,
+                        text=mute_msg_text,
+                        parse_mode=ParseMode.HTML,
+                    )
+                    asyncio.create_task(schedule_warning_cleanup(sent_mute, 15))
+                except Exception as exc:
+                    logger.error("[ABUSE MUTE FAILED] Could not mute user %s: %s", user_id, exc)
 
-            until_date = int(time.time()) + mute_duration_sec
-            try:
-                await context.bot.restrict_chat_member(
-                    chat_id=chat.id,
-                    user_id=user_id,
-                    permissions=MUTE_PERMISSIONS,
-                    until_date=until_date,
-                )
-                duration_str = format_duration(mute_duration_sec)
-                record_restriction(
-                    chat_id=chat.id,
-                    user_id=user_id,
-                    username=sender.username if sender else None,
-                    reason=f"Abuse detection: {result.reason} (Violation #{warn_num})",
-                    restricted_at=time.time(),
-                    expires_at=until_date,
-                    action="mute",
-                )
-                increment_stat(chat.id, "restrictions_applied", count=1, chat_title=chat_title)
-                log_moderation_event(
-                    chat.id,
-                    user_id,
-                    "ABUSE_MUTED",
-                    f"Muted for {duration_str} following violation #{warn_num}",
-                )
-
-                mute_msg_text = (
-                    f"⛔️ <b>Member Muted for Abusive Behavior</b>\n\n"
-                    f"👤 <b>Member:</b> {sender_mention}\n"
-                    f"⏱ <b>Mute Duration:</b> {duration_str}\n"
-                    f"🚫 <b>Reason:</b> Accumulated {warn_num} abuse warnings ({cat_display}).\n"
-                    f"<i>Messaging permissions will be restored automatically after the duration expires.</i>"
-                )
-                sent_mute = await context.bot.send_message(
-                    chat_id=chat.id,
-                    text=mute_msg_text,
-                    parse_mode=ParseMode.HTML,
-                )
-                asyncio.create_task(schedule_warning_cleanup(sent_mute, 15))
-            except Exception as exc:
-                logger.error("[ABUSE MUTE FAILED] Could not mute user %s: %s", user_id, exc)
+        return
 
 
 # =============================================================================
@@ -376,6 +383,8 @@ async def abuse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "🚨 <b>Waguri Abuse Moderation Commands</b>\n\n"
             "• <code>/abuse on</code> - Enable Abuse detection\n"
             "• <code>/abuse off</code> - Disable Abuse detection\n"
+            "• <code>/abuse mute &lt;mins&gt;</code> - Set temporary mute duration (e.g. 30)\n"
+            "• <code>/abuse limit &lt;number&gt;</code> - Set warnings before mute (e.g. 1)\n"
             "• <code>/abuse status</code> - Check system status & statistics\n"
             "• <code>/abuse words</code> - View custom blocked/allowed keywords\n"
             "• <code>/abuse addword &lt;word&gt;</code> - Add custom blocked keyword\n"
@@ -571,7 +580,29 @@ async def abuse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await message.reply_text(text, parse_mode=ParseMode.HTML)
         return
 
-    # 10. /abuse logs
+    # 10. /abuse mute <minutes>
+    elif subcmd == "mute":
+        if len(args) < 2 or not args[1].isdigit():
+            await message.reply_text("Usage: <code>/abuse mute &lt;minutes&gt;</code> (e.g. <code>/abuse mute 30</code>)", parse_mode=ParseMode.HTML)
+            return
+        mins = max(1, min(1440, int(args[1])))
+        update_abuse_settings(chat.id, abuse_mute_duration_minutes=mins)
+        log_moderation_event(chat.id, user.id if user else 0, "ABUSE_MUTE_SET", f"Set abuse mute duration to {mins}m")
+        await message.reply_text(f"⏱ <b>Abuse Mute Duration Updated:</b> Repeat violators will be muted for <b>{mins} minutes</b>.", parse_mode=ParseMode.HTML)
+        return
+
+    # 11. /abuse limit <number>
+    elif subcmd in ("limit", "warnlimit"):
+        if len(args) < 2 or not args[1].isdigit():
+            await message.reply_text("Usage: <code>/abuse limit &lt;number&gt;</code> (e.g. <code>/abuse limit 1</code>)", parse_mode=ParseMode.HTML)
+            return
+        limit = max(1, min(10, int(args[1])))
+        update_abuse_settings(chat.id, abuse_warning_limit=limit)
+        log_moderation_event(chat.id, user.id if user else 0, "ABUSE_LIMIT_SET", f"Set warning limit to {limit}")
+        await message.reply_text(f"⚠️ <b>Abuse Warning Limit Updated:</b> Members receive <b>{limit} warning(s)</b> before being muted.", parse_mode=ParseMode.HTML)
+        return
+
+    # 12. /abuse logs
     elif subcmd == "logs":
         logs = get_abuse_moderation_logs(chat.id, limit=8)
         if not logs:
@@ -601,20 +632,20 @@ def register_abuse_handlers(application: Application) -> None:
     # Group 0: /abuse command suite for group administrators
     application.add_handler(CommandHandler("abuse", abuse_command), group=0)
 
-    # Group 1: Abuse auto-moderation on regular messages (text & captions)
+    # Group -1: Abuse auto-moderation on regular messages (text & captions)
     application.add_handler(
         MessageHandler(
-            filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & filters.UpdateType.MESSAGE,
+            filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & ~filters.COMMAND,
             handle_abuse_message,
         ),
-        group=1,
+        group=-1,
     )
 
-    # Group 1: Abuse auto-moderation on edited messages (text & captions)
+    # Group -1: Abuse auto-moderation on edited messages (text & captions)
     application.add_handler(
         MessageHandler(
-            filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & filters.UpdateType.EDITED_MESSAGE,
+            filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION) & filters.UpdateType.EDITED_MESSAGE & ~filters.COMMAND,
             handle_abuse_message,
         ),
-        group=1,
+        group=-1,
     )
