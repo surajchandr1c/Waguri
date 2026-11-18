@@ -5,8 +5,6 @@ import Header from '@/components/Header';
 import { 
   Sticker, 
   Clock, 
-  Send, 
-  Calendar, 
   Trash2, 
   Play, 
   Pause, 
@@ -19,7 +17,8 @@ import {
   ChevronDown, 
   ChevronUp, 
   Layers, 
-  Users 
+  Users,
+  Sparkles
 } from 'lucide-react';
 
 interface ScheduledStickerItem {
@@ -35,6 +34,8 @@ interface ScheduledStickerItem {
   repeat_interval: string;
   status: 'active' | 'paused' | 'completed';
   last_sent_at?: string | null;
+  sticker_pack_name?: string | null;
+  current_index?: number;
   created_at?: string;
 }
 
@@ -75,7 +76,7 @@ export default function StickersPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [sendingId, setSendingId] = useState<number | null>(null);
+  const [togglingId, setTogglingId] = useState<number | null>(null);
 
   // UI State
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -89,8 +90,6 @@ export default function StickersPage() {
   const [customChatId, setCustomChatId] = useState<string>('');
   const [stickerUrl, setStickerUrl] = useState<string>('');
   const [stickerName, setStickerName] = useState<string>('');
-  const [scheduleType, setScheduleType] = useState<'recurring' | 'once'>('recurring');
-  const [scheduledTime, setScheduledTime] = useState<string>('');
   const [repeatInterval, setRepeatInterval] = useState<string>('5min');
 
   // Edit State
@@ -99,20 +98,9 @@ export default function StickersPage() {
   const [editSelectedChatId, setEditSelectedChatId] = useState<string>('');
   const [editStickerUrl, setEditStickerUrl] = useState<string>('');
   const [editStickerName, setEditStickerName] = useState<string>('');
-  const [editScheduleType, setEditScheduleType] = useState<'recurring' | 'once'>('recurring');
-  const [editScheduledTime, setEditScheduledTime] = useState<string>('');
   const [editRepeatInterval, setEditRepeatInterval] = useState<string>('5min');
   const [editStatus, setEditStatus] = useState<'active' | 'paused' | 'completed'>('active');
   const [savingEdit, setSavingEdit] = useState(false);
-
-  // Default scheduled time
-  useEffect(() => {
-    const next = new Date(Date.now() + 60000);
-    const isoLocal = new Date(next.getTime() - next.getTimezoneOffset() * 60000)
-      .toISOString()
-      .slice(0, 16);
-    setScheduledTime(isoLocal);
-  }, []);
 
   const fetchData = async () => {
     try {
@@ -152,7 +140,7 @@ export default function StickersPage() {
   const handleCreateSticker = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!stickerUrl.trim()) {
-      showNotice('error', 'Please enter a sticker file ID or pack URL.');
+      showNotice('error', 'Please enter a sticker pack link or sticker file ID.');
       return;
     }
 
@@ -177,15 +165,14 @@ export default function StickersPage() {
           chat_title: chatTitle,
           sticker_url: stickerUrl.trim(),
           sticker_name: stickerName.trim() || 'Sticker Broadcast',
-          schedule_type: scheduleType,
-          scheduled_time: scheduledTime || new Date().toISOString().slice(0, 16),
-          repeat_interval: scheduleType === 'recurring' ? repeatInterval : 'none',
+          schedule_type: 'recurring',
+          repeat_interval: repeatInterval,
         }),
       });
 
       const data = await res.json();
       if (res.ok && data.success) {
-        showNotice('success', 'Sticker broadcast scheduled successfully!');
+        showNotice('success', 'Sticker broadcast activated! First sticker sent; recurring sends started.');
         setStickerUrl('');
         setStickerName('');
         setIsFormOpen(false);
@@ -200,49 +187,37 @@ export default function StickersPage() {
     }
   };
 
-  const handleSendNow = async (id: number, chatTitle: string) => {
-    try {
-      setSendingId(id);
-      const res = await fetch('/api/stickers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'send_now', id }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        showNotice('success', `Sticker sent to ${chatTitle} right now!`);
-        fetchData();
-      } else {
-        showNotice('error', data.details || data.error || 'Failed to send sticker');
-      }
-    } catch (err: any) {
-      showNotice('error', err.message || 'Failed to trigger send');
-    } finally {
-      setSendingId(null);
-    }
-  };
-
   const handleToggleStatus = async (id: number, currentStatus: string) => {
     const newStatus = currentStatus === 'active' ? 'paused' : 'active';
     try {
+      setTogglingId(id);
       const res = await fetch('/api/stickers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'toggle', id, status: newStatus }),
       });
+      const data = await res.json();
       if (res.ok) {
         setStickers((prev) =>
           prev.map((s) => (s.id === id ? { ...s, status: newStatus as any } : s))
         );
-        showNotice('success', `Sticker schedule is now ${newStatus}`);
+        showNotice(
+          'success',
+          newStatus === 'active'
+            ? 'Sticker activated! Sent sticker immediately & recurring sends running.'
+            : 'Sticker schedule paused.'
+        );
+        fetchData();
       }
     } catch (err) {
       console.error('Toggle failed:', err);
+    } finally {
+      setTogglingId(null);
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this scheduled sticker?')) return;
+    if (!confirm('Are you sure you want to delete this sticker schedule?')) return;
     try {
       const res = await fetch('/api/stickers', {
         method: 'POST',
@@ -264,8 +239,6 @@ export default function StickersPage() {
     setEditSelectedChatId(String(stk.chat_id || ''));
     setEditStickerUrl(stk.sticker_url || '');
     setEditStickerName(stk.sticker_name || '');
-    setEditScheduleType(stk.schedule_type || 'recurring');
-    setEditScheduledTime(stk.scheduled_time || '');
     setEditRepeatInterval(stk.repeat_interval || '5min');
     setEditStatus(stk.status || 'active');
   };
@@ -274,7 +247,7 @@ export default function StickersPage() {
     e.preventDefault();
     if (!editingSticker) return;
     if (!editStickerUrl.trim()) {
-      showNotice('error', 'Sticker identifier or URL is required.');
+      showNotice('error', 'Sticker pack link or identifier is required.');
       return;
     }
 
@@ -295,9 +268,8 @@ export default function StickersPage() {
           chat_title: chatTitle,
           sticker_url: editStickerUrl.trim(),
           sticker_name: editStickerName.trim() || 'Sticker Broadcast',
-          schedule_type: editScheduleType,
-          scheduled_time: editScheduledTime,
-          repeat_interval: editScheduleType === 'recurring' ? editRepeatInterval : 'none',
+          schedule_type: 'recurring',
+          repeat_interval: editRepeatInterval,
           status: editStatus,
         }),
       });
@@ -333,7 +305,7 @@ export default function StickersPage() {
     <div className="flex-1 flex flex-col bg-black min-h-screen">
       <Header
         title="Stickers"
-        description="Schedule stickers to be sent automatically to your Telegram Group Chats at set intervals."
+        description="Schedule stickers to automatically send to your Telegram Group Chats at set intervals."
         badge="Sticker Automation"
       />
 
@@ -396,15 +368,18 @@ export default function StickersPage() {
           </div>
         </div>
 
-        {/* Simple & Clean Creation Form */}
+        {/* Simple & Clean Creation Form (No Date/Time Picker - Sends at Interval When Active) */}
         {isFormOpen && (
           <div className="p-5 sm:p-6 rounded-2xl bg-zinc-950 border border-zinc-800 shadow-xl space-y-4 animate-in fade-in duration-200">
             <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
               <h3 className="font-bold text-sm text-white flex items-center gap-2">
                 <Plus className="w-4 h-4 text-white" />
-                <span>Schedule New Sticker</span>
+                <span>Schedule New Sticker Broadcast</span>
               </h3>
-              <span className="text-xs text-zinc-400">Quick setup</span>
+              <span className="text-xs text-emerald-400 flex items-center gap-1">
+                <Sparkles className="w-3 h-3" />
+                <span>Sends different stickers from pack</span>
+              </span>
             </div>
 
             <form onSubmit={handleCreateSticker} className="space-y-4">
@@ -412,16 +387,19 @@ export default function StickersPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="block text-xs font-semibold text-zinc-200">
-                    Sticker Link or File ID <span className="text-red-400">*</span>
+                    Sticker Pack Link or File ID <span className="text-red-400">*</span>
                   </label>
                   <input
                     type="text"
                     required
                     value={stickerUrl}
                     onChange={(e) => setStickerUrl(e.target.value)}
-                    placeholder="https://t.me/addstickers/... or CAACAgIA..."
+                    placeholder="https://t.me/addstickers/HotCherry or pack name"
                     className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs sm:text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-400 font-mono"
                   />
+                  <p className="text-[11px] text-zinc-500">
+                    ✨ Tip: Give a pack link to automatically rotate and send a different sticker every time!
+                  </p>
                 </div>
 
                 <div className="space-y-1.5">
@@ -432,7 +410,7 @@ export default function StickersPage() {
                     type="text"
                     value={stickerName}
                     onChange={(e) => setStickerName(e.target.value)}
-                    placeholder="e.g. Welcome Cat, Party Popper"
+                    placeholder="e.g. Welcome Stickers, Fun Reactions"
                     className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs sm:text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-400"
                   />
                 </div>
@@ -503,53 +481,30 @@ export default function StickersPage() {
                 )}
               </div>
 
-              {/* 3. Send Frequency & Time Interval */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-zinc-200">
-                    How often should it send?
-                  </label>
-                  <select
-                    value={scheduleType === 'recurring' ? repeatInterval : 'once'}
-                    onChange={(e) => {
-                      if (e.target.value === 'once') {
-                        setScheduleType('once');
-                      } else {
-                        setScheduleType('recurring');
-                        setRepeatInterval(e.target.value);
-                      }
-                    }}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs sm:text-sm text-white focus:outline-none focus:ring-1 focus:ring-zinc-400 cursor-pointer font-medium"
-                  >
-                    <optgroup label="Preset Time Intervals">
-                      <option value="3min">Every 3 Minutes</option>
-                      <option value="5min">Every 5 Minutes</option>
-                      <option value="10min">Every 10 Minutes</option>
-                      <option value="15min">Every 15 Minutes</option>
-                      <option value="30min">Every 30 Minutes</option>
-                      <option value="1hr">Every 1 Hour</option>
-                      <option value="2h">Every 2 Hours</option>
-                      <option value="6h">Every 6 Hours</option>
-                      <option value="12h">Every 12 Hours</option>
-                      <option value="daily">Daily (Every 24 Hours)</option>
-                    </optgroup>
-                    <optgroup label="One-Time Delivery">
-                      <option value="once">Send Once at Scheduled Time</option>
-                    </optgroup>
-                  </select>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-semibold text-zinc-200">
-                    Start Time
-                  </label>
-                  <input
-                    type="datetime-local"
-                    value={scheduledTime}
-                    onChange={(e) => setScheduledTime(e.target.value)}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs sm:text-sm text-white focus:outline-none focus:ring-1 focus:ring-zinc-400 cursor-pointer font-mono"
-                  />
-                </div>
+              {/* 3. Send Frequency / Time Interval */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-zinc-200">
+                  Time Interval (How often to send stickers)
+                </label>
+                <select
+                  value={repeatInterval}
+                  onChange={(e) => setRepeatInterval(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs sm:text-sm text-white focus:outline-none focus:ring-1 focus:ring-zinc-400 cursor-pointer font-medium"
+                >
+                  <option value="3min">Every 3 Minutes</option>
+                  <option value="5min">Every 5 Minutes</option>
+                  <option value="10min">Every 10 Minutes</option>
+                  <option value="15min">Every 15 Minutes</option>
+                  <option value="30min">Every 30 Minutes</option>
+                  <option value="1hr">Every 1 Hour</option>
+                  <option value="2h">Every 2 Hours</option>
+                  <option value="6h">Every 6 Hours</option>
+                  <option value="12h">Every 12 Hours</option>
+                  <option value="daily">Daily (Every 24 Hours)</option>
+                </select>
+                <p className="text-[11px] text-zinc-500">
+                  When active, the bot automatically sends stickers to the target group at this interval.
+                </p>
               </div>
 
               {/* Submit Buttons */}
@@ -567,7 +522,7 @@ export default function StickersPage() {
                   className="px-5 py-2 rounded-xl bg-white hover:bg-zinc-200 text-black text-xs font-bold transition-all shadow cursor-pointer active:scale-95 disabled:opacity-50 flex items-center gap-2"
                 >
                   {submitting && <RefreshCw className="w-3.5 h-3.5 animate-spin text-black" />}
-                  <span>Save & Schedule</span>
+                  <span>Activate & Start Sending</span>
                 </button>
               </div>
             </form>
@@ -608,9 +563,9 @@ export default function StickersPage() {
           ) : filteredStickers.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {filteredStickers.map((item) => {
-                const isSending = sendingId === item.id;
                 const isPaused = item.status === 'paused';
                 const isAllGC = item.target_type === 'all_gc' || item.chat_id === 0;
+                const isToggling = togglingId === item.id;
 
                 return (
                   <div
@@ -640,70 +595,75 @@ export default function StickersPage() {
 
                       {/* Sticker Preview / Title */}
                       <div className="bg-zinc-900/60 p-3 rounded-xl border border-zinc-800/80 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <Sticker className="w-4 h-4 text-zinc-300" />
-                          <h4 className="font-semibold text-white text-sm truncate">{item.sticker_name}</h4>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Sticker className="w-4 h-4 text-zinc-300" />
+                            <h4 className="font-semibold text-white text-sm truncate">{item.sticker_name}</h4>
+                          </div>
+                          {item.sticker_pack_name && (
+                            <span className="text-[10px] px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-300 font-mono">
+                              Pack: {item.sticker_pack_name}
+                            </span>
+                          )}
                         </div>
                         <p className="text-[11px] font-mono text-zinc-400 truncate">
                           {item.sticker_url}
                         </p>
                       </div>
 
-                      {/* Info Badges */}
-                      <div className="flex flex-wrap items-center gap-2 pt-2.5 text-[11px] text-zinc-400">
-                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-900 border border-zinc-800">
-                          <Clock className="w-3 h-3 text-zinc-400" />
-                          <span>
-                            {item.schedule_type === 'recurring'
-                              ? formatIntervalLabel(item.repeat_interval)
-                              : 'Once'}
+                      {/* Info Badge: Only Interval (Date/Next Time Removed) */}
+                      <div className="flex items-center gap-2 pt-2.5 text-[11px] text-zinc-400">
+                        <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-900 border border-zinc-800 font-medium">
+                          <Clock className="w-3.5 h-3.5 text-zinc-300" />
+                          <span className="text-white font-semibold">
+                            {formatIntervalLabel(item.repeat_interval)}
                           </span>
                         </span>
 
-                        <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-900 border border-zinc-800">
-                          <Calendar className="w-3 h-3 text-zinc-400" />
-                          <span>Next: {new Date(item.scheduled_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        <span className="text-[10px] text-zinc-500 font-mono">
+                          {item.status === 'active' ? '• Sending automatically' : '• Paused'}
                         </span>
                       </div>
                     </div>
 
-                    {/* Action Buttons */}
-                    <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between gap-1.5">
-                      <button
-                        onClick={() => handleSendNow(item.id, isAllGC ? 'All GCs' : item.chat_title)}
-                        disabled={isSending}
-                        className="flex-1 py-1.5 px-3 rounded-xl bg-white hover:bg-zinc-200 text-black text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50 active:scale-95"
-                      >
-                        {isSending ? (
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-black" />
-                        ) : (
-                          <Send className="w-3.5 h-3.5 text-black" />
-                        )}
-                        <span>{isSending ? 'Sending...' : 'Send Now'}</span>
-                      </button>
-
+                    {/* Action Buttons: ONLY Pause/Resume, Edit, Delete (Send Now Removed) */}
+                    <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-end gap-2">
+                      {/* 1. Pause / Resume icon button */}
                       <button
                         onClick={() => handleToggleStatus(item.id, item.status)}
-                        className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 transition-colors cursor-pointer"
-                        title={isPaused ? 'Resume' : 'Pause'}
+                        disabled={isToggling}
+                        className={`p-2.5 rounded-xl border transition-all cursor-pointer ${
+                          isPaused
+                            ? 'bg-emerald-950/80 hover:bg-emerald-900 text-emerald-300 border-emerald-800'
+                            : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border-zinc-800'
+                        }`}
+                        title={isPaused ? 'Resume & Start Sending' : 'Pause Sending'}
                       >
-                        {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                        {isToggling ? (
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                        ) : isPaused ? (
+                          <Play className="w-4 h-4 text-emerald-400" />
+                        ) : (
+                          <Pause className="w-4 h-4 text-zinc-300" />
+                        )}
                       </button>
 
+                      {/* 2. Edit icon button */}
                       <button
                         onClick={() => handleOpenEdit(item)}
-                        className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 transition-colors cursor-pointer"
+                        className="p-2.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 transition-colors cursor-pointer"
                         title="Edit Sticker Schedule"
                       >
-                        <Pencil className="w-3.5 h-3.5" />
+                        <Pencil className="w-4 h-4" />
                       </button>
 
+                      {/* 3. Delete icon button */}
                       <button
                         onClick={() => handleDelete(item.id)}
-                        className="p-1.5 rounded-xl bg-zinc-900 hover:bg-red-950/60 text-zinc-400 hover:text-red-400 border border-zinc-800 hover:border-red-800 transition-colors cursor-pointer"
+                        className="p-2.5 rounded-xl bg-zinc-900 hover:bg-red-950/60 text-zinc-400 hover:text-red-400 border border-zinc-800 hover:border-red-800 transition-colors cursor-pointer"
                         title="Delete"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                   </div>
@@ -733,7 +693,7 @@ export default function StickersPage() {
             >
               <div className="flex items-center gap-2">
                 <Clock className="w-3.5 h-3.5 text-zinc-400" />
-                <span>Recent Sticker Logs ({logs.length})</span>
+                <span>Recent Sticker Deliveries ({logs.length})</span>
               </div>
               {showLogs ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </button>
@@ -757,7 +717,7 @@ export default function StickersPage() {
           </div>
         )}
 
-        {/* Clean Edit Modal */}
+        {/* Clean Edit Modal (No Date/Time Picker - Just Pack Link, Target, Interval, and Status) */}
         {editingSticker && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
             <div className="w-full max-w-lg p-5 sm:p-6 rounded-2xl bg-zinc-950 border border-zinc-800 shadow-2xl space-y-4">
@@ -773,7 +733,7 @@ export default function StickersPage() {
 
               <form onSubmit={handleSaveEdit} className="space-y-3.5 text-xs">
                 <div className="space-y-1">
-                  <label className="font-semibold text-zinc-300">Sticker Link or File ID</label>
+                  <label className="font-semibold text-zinc-300">Sticker Pack Link or File ID</label>
                   <input
                     type="text"
                     required
@@ -781,6 +741,9 @@ export default function StickersPage() {
                     onChange={(e) => setEditStickerUrl(e.target.value)}
                     className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-mono text-xs focus:outline-none"
                   />
+                  <p className="text-[10px] text-zinc-500">
+                    Enter a pack link to send different stickers on each interval.
+                  </p>
                 </div>
 
                 <div className="space-y-1">
@@ -809,15 +772,8 @@ export default function StickersPage() {
                   <div className="space-y-1">
                     <label className="font-semibold text-zinc-300">Time Interval</label>
                     <select
-                      value={editScheduleType === 'recurring' ? editRepeatInterval : 'once'}
-                      onChange={(e) => {
-                        if (e.target.value === 'once') {
-                          setEditScheduleType('once');
-                        } else {
-                          setEditScheduleType('recurring');
-                          setEditRepeatInterval(e.target.value);
-                        }
-                      }}
+                      value={editRepeatInterval}
+                      onChange={(e) => setEditRepeatInterval(e.target.value)}
                       className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-white text-xs cursor-pointer focus:outline-none"
                     >
                       <option value="3min">Every 3 Minutes</option>
@@ -827,8 +783,9 @@ export default function StickersPage() {
                       <option value="30min">Every 30 Minutes</option>
                       <option value="1hr">Every 1 Hour</option>
                       <option value="2h">Every 2 Hours</option>
+                      <option value="6h">Every 6 Hours</option>
+                      <option value="12h">Every 12 Hours</option>
                       <option value="daily">Daily (24h)</option>
-                      <option value="once">Send Once</option>
                     </select>
                   </div>
                 </div>
@@ -857,7 +814,7 @@ export default function StickersPage() {
                     onChange={(e) => setEditStatus(e.target.value as any)}
                     className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-white text-xs cursor-pointer focus:outline-none"
                   >
-                    <option value="active">Active (Sending Automatically)</option>
+                    <option value="active">Active (Sends automatically at interval)</option>
                     <option value="paused">Paused</option>
                     <option value="completed">Completed</option>
                   </select>

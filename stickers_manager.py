@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import time
 import sqlite3
 import urllib.request
 import urllib.error
@@ -9,6 +10,8 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
+
+_STICKER_PACK_CACHE: dict[str, tuple[float, list[str]]] = {}
 
 def get_db_path():
     candidates = [
@@ -38,11 +41,13 @@ def init_tables():
         sticker_name TEXT,
         target_type TEXT DEFAULT 'single',
         target_chat_ids TEXT,
-        schedule_type TEXT DEFAULT 'once',
+        schedule_type TEXT DEFAULT 'recurring',
         scheduled_time TEXT NOT NULL,
-        repeat_interval TEXT DEFAULT 'none',
+        repeat_interval TEXT DEFAULT '5min',
         status TEXT DEFAULT 'active',
         last_sent_at TEXT,
+        sticker_pack_name TEXT,
+        current_index INTEGER DEFAULT 0,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
@@ -59,17 +64,28 @@ def init_tables():
         details TEXT
     )
     """)
-    # Migration check for target_type and target_chat_ids
+
+    # Check and add columns safely if missing
     cur.execute("PRAGMA table_info(scheduled_stickers)")
     cols = [r[1] for r in cur.fetchall()]
     if "target_type" not in cols:
         try:
-            cur.execute("ALTER TABLE scheduled_stickers ADD COLUMN target_type TEXT DEFAULT 'single'")
+            cur.execute("ALTER TABLE scheduled_stickers ADD COLUMN target_type TEXT DEFAULT 'all_gc'")
         except Exception:
             pass
     if "target_chat_ids" not in cols:
         try:
             cur.execute("ALTER TABLE scheduled_stickers ADD COLUMN target_chat_ids TEXT")
+        except Exception:
+            pass
+    if "sticker_pack_name" not in cols:
+        try:
+            cur.execute("ALTER TABLE scheduled_stickers ADD COLUMN sticker_pack_name TEXT")
+        except Exception:
+            pass
+    if "current_index" not in cols:
+        try:
+            cur.execute("ALTER TABLE scheduled_stickers ADD COLUMN current_index INTEGER DEFAULT 0")
         except Exception:
             pass
 
@@ -78,11 +94,11 @@ def init_tables():
 
 def parse_interval_to_timedelta(interval: str) -> timedelta:
     if not interval or interval == "none":
-        return timedelta(minutes=30)
+        return timedelta(minutes=5)
     s = str(interval).strip().lower().replace(" ", "")
-    if s == "daily" or s == "day":
+    if s in ("daily", "day"):
         return timedelta(days=1)
-    if s == "weekly" or s == "week":
+    if s in ("weekly", "week"):
         return timedelta(days=7)
 
     # Check minute suffixes
@@ -116,7 +132,7 @@ def parse_interval_to_timedelta(interval: str) -> timedelta:
         val = int(s)
         return timedelta(minutes=val)
     except ValueError:
-        return timedelta(minutes=30)
+        return timedelta(minutes=5)
 
 def compute_next_datetime(base_dt_str: str, interval_str: str) -> str:
     try:
@@ -140,39 +156,203 @@ def get_active_group_chats():
     conn.close()
     return chats
 
-def resolve_sticker_identifier(sticker_input: str) -> str:
-    """
-    If the user inputs a t.me/addstickers/PackName link,
-    query Telegram Bot API to get the first sticker file_id from that pack.
-    Otherwise return the input as-is (e.g. file_id or web URL).
-    """
-    clean = sticker_input.strip()
-    pack_name = None
+def extract_pack_name(input_str: str) -> str | None:
+    """Extract sticker pack name from link or identifier"""
+    if not input_str:
+        return None
+    s = str(input_str).strip()
+    if "addstickers/" in s:
+        parts = s.split("addstickers/")
+        if len(parts) > 1:
+            return parts[1].split("?")[0].split("/")[0].strip()
+    if "set=" in s:
+        parts = s.split("set=")
+        if len(parts) > 1:
+            return parts[1].split("&")[0].strip()
+    if not any(c in s for c in ['/', ':', ' ', '?', '=']) and len(s) < 64:
+        return s
+    return None
 
-    if "addstickers/" in clean:
-        parts = clean.split("addstickers/")
-        if len(parts) > 1:
-            pack_name = parts[1].split("?")[0].split("/")[0].strip()
-    elif clean.startswith("t.me/"):
-        parts = clean.split("t.me/")
-        if len(parts) > 1:
-            pack_name = parts[1].split("?")[0].split("/")[0].strip()
+def get_pack_stickers(pack_name: str) -> list[str]:
+    """Retrieve all sticker file_ids belonging to a sticker set from Telegram API"""
+    if not pack_name:
+        return []
+
+    now = time.time()
+    if pack_name in _STICKER_PACK_CACHE:
+        ts, stickers = _STICKER_PACK_CACHE[pack_name]
+        if now - ts < 300:  # 5 min cache
+            return stickers
 
     token = get_bot_token()
-    if pack_name and token:
-        try:
-            url = f"https://api.telegram.org/bot{token}/getStickerSet?name={urllib.parse.quote(pack_name)}"
-            req = urllib.request.urlopen(url, timeout=10)
-            data = json.loads(req.read().decode("utf-8"))
-            if data.get("ok") and data.get("result", {}).get("stickers"):
-                return data["result"]["stickers"][0]["file_id"]
-        except Exception:
-            pass
+    if not token:
+        return []
 
-    return clean
+    try:
+        url = f"https://api.telegram.org/bot{token}/getStickerSet?name={urllib.parse.quote(pack_name)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "WaguriBot/1.0"})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("ok"):
+                raw_stickers = data.get("result", {}).get("stickers", [])
+                file_ids = [s["file_id"] for s in raw_stickers if "file_id" in s]
+                if file_ids:
+                    _STICKER_PACK_CACHE[pack_name] = (now, file_ids)
+                    return file_ids
+    except Exception:
+        pass
+
+    return []
+
+def resolve_next_sticker(sticker_id: int, cur: sqlite3.Cursor, item: dict) -> tuple[str, str]:
+    """
+    Cycles to the next sticker in the pack so a different sticker is sent every interval.
+    If it's a single sticker file_id, returns it directly.
+    """
+    raw_url = item.get("sticker_url") or ""
+    pack_name = item.get("sticker_pack_name") or extract_pack_name(raw_url)
+
+    if pack_name:
+        file_ids = get_pack_stickers(pack_name)
+        if file_ids:
+            curr_idx = item.get("current_index") or 0
+            selected_file_id = file_ids[curr_idx % len(file_ids)]
+            next_idx = (curr_idx + 1) % len(file_ids)
+
+            cur.execute("""
+            UPDATE scheduled_stickers
+            SET current_index = ?, sticker_pack_name = ?
+            WHERE id = ?
+            """, (next_idx, pack_name, sticker_id))
+
+            note = f"Sticker #{curr_idx % len(file_ids) + 1} of {len(file_ids)} from pack '{pack_name}'"
+            return selected_file_id, note
+
+    return raw_url, "Direct sticker"
+
+def send_sticker_api(chat_id: int, sticker_input: str) -> dict:
+    """Send sticker directly to Telegram group chat using Bot API"""
+    token = get_bot_token()
+    if not token:
+        return {"ok": False, "error": "TELEGRAM_BOT_TOKEN not configured"}
+
+    api_url = f"https://api.telegram.org/bot{token}/sendSticker"
+    payload = json.dumps({
+        "chat_id": chat_id,
+        "sticker": sticker_input
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        api_url,
+        data=payload,
+        headers={"Content-Type": "application/json"}
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8")
+        try:
+            return json.loads(err_body)
+        except Exception:
+            return {"ok": False, "error": f"HTTP {e.code}: {err_body}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def send_now(sticker_id: int):
+    """
+    Dispatches the next sticker to target group chat(s),
+    cycling to a different sticker each time if a pack is configured.
+    """
+    init_tables()
+    db_path = get_db_path()
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM scheduled_stickers WHERE id = ? LIMIT 1", (sticker_id,))
+    item = cur.fetchone()
+    if not item:
+        conn.close()
+        return {"success": False, "error": "Scheduled sticker not found"}
+
+    item = dict(item)
+    all_gcs = get_active_group_chats()
+
+    target_type = item.get("target_type") or "all_gc"
+    targets = []
+    if target_type == "all_gc" or item.get("chat_id") == 0:
+        targets = all_gcs
+    elif target_type == "selected" and item.get("target_chat_ids"):
+        try:
+            sel_ids = json.loads(item["target_chat_ids"])
+            targets = [g for g in all_gcs if g["chat_id"] in sel_ids]
+        except Exception:
+            targets = all_gcs
+    else:
+        cid = item.get("chat_id")
+        title = item.get("chat_title") or f"Group {cid}"
+        targets = [{"chat_id": cid, "chat_title": title}]
+
+    if not targets:
+        targets = all_gcs
+
+    # Determine which sticker to send for this interval cycle
+    sticker_to_send, pack_note = resolve_next_sticker(sticker_id, cur, item)
+
+    now_iso = datetime.now().isoformat()
+    success_count = 0
+    fail_count = 0
+    results = []
+
+    for gc in targets:
+        cid = gc["chat_id"]
+        title = gc["chat_title"]
+        result = send_sticker_api(cid, sticker_to_send)
+        is_ok = result.get("ok", False)
+        status = "success" if is_ok else "failed"
+        details = f"{pack_note} delivered" if is_ok else result.get("description", result.get("error", "Unknown error"))
+
+        if is_ok:
+            success_count += 1
+        else:
+            fail_count += 1
+
+        cur.execute("""
+        INSERT INTO sticker_send_logs (scheduled_id, chat_id, chat_title, sticker_url, sent_at, status, details)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (sticker_id, cid, title, sticker_to_send, now_iso, status, details))
+
+        results.append({"chat_id": cid, "chat_title": title, "ok": is_ok, "details": details})
+
+    if success_count > 0:
+        cur.execute("""
+        UPDATE scheduled_stickers
+        SET last_sent_at = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """, (now_iso, sticker_id))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": success_count > 0,
+        "total_targets": len(targets),
+        "success_count": success_count,
+        "fail_count": fail_count,
+        "sticker_sent": sticker_to_send,
+        "details": pack_note,
+        "results": results,
+        "sent_at": now_iso
+    }
 
 def process_due_stickers():
-    """Check for active stickers whose scheduled_time <= now and trigger delivery"""
+    """
+    Silent background checker: triggers stickers that are active and due,
+    sending a different sticker from the pack at every interval.
+    """
     init_tables()
     db_path = get_db_path()
     conn = sqlite3.connect(db_path)
@@ -192,30 +372,31 @@ def process_due_stickers():
     results = []
     for item in due_items:
         last_sent = item.get("last_sent_at")
-        if last_sent and last_sent[:16] >= item["scheduled_time"][:16]:
+        interval = item.get("repeat_interval", "5min")
+
+        # Avoid duplicate firing within the exact same minute
+        if last_sent and last_sent[:16] >= now_iso:
+            next_time_str = compute_next_datetime(now_iso, interval)
+            conn = sqlite3.connect(db_path)
+            conn.execute("UPDATE scheduled_stickers SET scheduled_time = ? WHERE id = ?", (next_time_str, item["id"]))
+            conn.commit()
+            conn.close()
             continue
 
+        # Send sticker (advances to next sticker in pack)
         send_res = send_now(item["id"])
         results.append({"id": item["id"], "result": send_res})
 
-        # Advance scheduled_time or mark completed
+        # Advance scheduled_time to next interval
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
-        if item.get("schedule_type") == "recurring":
-            interval = item.get("repeat_interval", "daily")
-            next_time_str = compute_next_datetime(item["scheduled_time"], interval)
+        next_time_str = compute_next_datetime(now_iso, interval)
 
-            cur.execute("""
-            UPDATE scheduled_stickers
-            SET scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """, (next_time_str, item["id"]))
-        else:
-            cur.execute("""
-            UPDATE scheduled_stickers
-            SET status = 'completed', updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """, (item["id"],))
+        cur.execute("""
+        UPDATE scheduled_stickers
+        SET scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """, (next_time_str, item["id"]))
 
         conn.commit()
         conn.close()
@@ -240,9 +421,7 @@ def list_all():
     cur.execute("SELECT * FROM sticker_send_logs ORDER BY id DESC LIMIT 50")
     logs = [dict(r) for r in cur.fetchall()]
 
-    # Available Group Chats
     chats = get_active_group_chats()
-
     conn.close()
 
     return {
@@ -259,14 +438,13 @@ def add_sticker(data: dict):
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
-    target_type = data.get("target_type", "single")
+    target_type = data.get("target_type", "all_gc")
     chat_id = int(data.get("chat_id") or 0)
     target_chat_ids = json.dumps(data.get("target_chat_ids", []))
     sticker_url = data.get("sticker_url", "").strip()
     sticker_name = data.get("sticker_name", "").strip() or "GC Sticker Broadcast"
-    schedule_type = data.get("schedule_type", "once")
-    scheduled_time = data.get("scheduled_time", "").strip() or datetime.now().strftime("%Y-%m-%dT%H:%M")
-    repeat_interval = data.get("repeat_interval", "none")
+    schedule_type = "recurring"
+    repeat_interval = data.get("repeat_interval", "5min")
     chat_title = data.get("chat_title", "").strip()
 
     if target_type == "all_gc":
@@ -276,18 +454,43 @@ def add_sticker(data: dict):
         row = cur.fetchone()
         chat_title = row[0] if row else f"Group {chat_id}"
 
-    resolved_id = resolve_sticker_identifier(sticker_url)
+    # Extract pack name if link or pack provided
+    pack_name = extract_pack_name(sticker_url)
+
+    now_dt = datetime.now()
+    now_str = now_dt.strftime("%Y-%m-%dT%H:%M")
 
     cur.execute("""
-    INSERT INTO scheduled_stickers (chat_id, chat_title, sticker_url, sticker_name, target_type, target_chat_ids, schedule_type, scheduled_time, repeat_interval, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')
-    """, (chat_id, chat_title, resolved_id, sticker_name, target_type, target_chat_ids, schedule_type, scheduled_time, repeat_interval))
+    INSERT INTO scheduled_stickers (
+        chat_id, chat_title, sticker_url, sticker_name, target_type, target_chat_ids,
+        schedule_type, scheduled_time, repeat_interval, status, sticker_pack_name, current_index
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 0)
+    """, (chat_id, chat_title, sticker_url, sticker_name, target_type, target_chat_ids,
+          schedule_type, now_str, repeat_interval, pack_name))
 
     new_id = cur.lastrowid
     conn.commit()
     conn.close()
 
-    return {"success": True, "id": new_id, "message": "Scheduled sticker saved successfully"}
+    # Automatically start sending sticker right now when active
+    try:
+        send_now(new_id)
+        # Advance scheduled_time to next interval
+        delta = parse_interval_to_timedelta(repeat_interval)
+        next_time = (datetime.now() + delta).strftime("%Y-%m-%dT%H:%M")
+        conn2 = sqlite3.connect(db_path)
+        conn2.execute("UPDATE scheduled_stickers SET scheduled_time = ? WHERE id = ?", (next_time, new_id))
+        conn2.commit()
+        conn2.close()
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "id": new_id,
+        "message": f"Sticker schedule activated! First sticker sent; next will send every {repeat_interval}."
+    }
 
 def edit_sticker(sticker_id: int, data: dict):
     init_tables()
@@ -300,15 +503,13 @@ def edit_sticker(sticker_id: int, data: dict):
         conn.close()
         return {"success": False, "error": f"Scheduled sticker #{sticker_id} not found"}
 
-    target_type = data.get("target_type", "single")
+    target_type = data.get("target_type", "all_gc")
     chat_id = int(data.get("chat_id") or 0)
     chat_title = data.get("chat_title", "").strip()
     target_chat_ids = json.dumps(data.get("target_chat_ids", []))
     sticker_url = data.get("sticker_url", "").strip()
     sticker_name = data.get("sticker_name", "").strip() or "GC Sticker Broadcast"
-    schedule_type = data.get("schedule_type", "once")
-    scheduled_time = data.get("scheduled_time", "").strip() or datetime.now().strftime("%Y-%m-%dT%H:%M")
-    repeat_interval = data.get("repeat_interval", "none")
+    repeat_interval = data.get("repeat_interval", "5min")
     status = data.get("status", "active")
 
     if target_type == "all_gc":
@@ -318,16 +519,16 @@ def edit_sticker(sticker_id: int, data: dict):
         row = cur.fetchone()
         chat_title = row[0] if row else f"Group {chat_id}"
 
-    resolved_id = resolve_sticker_identifier(sticker_url) if sticker_url else sticker_url
+    pack_name = extract_pack_name(sticker_url)
 
     cur.execute("""
     UPDATE scheduled_stickers
     SET target_type = ?, chat_id = ?, chat_title = ?, target_chat_ids = ?,
-        sticker_url = ?, sticker_name = ?, schedule_type = ?, scheduled_time = ?,
-        repeat_interval = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+        sticker_url = ?, sticker_name = ?, repeat_interval = ?, status = ?,
+        sticker_pack_name = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-    """, (target_type, chat_id, chat_title, target_chat_ids, resolved_id, sticker_name,
-          schedule_type, scheduled_time, repeat_interval, status, sticker_id))
+    """, (target_type, chat_id, chat_title, target_chat_ids, sticker_url, sticker_name,
+          repeat_interval, status, pack_name, sticker_id))
 
     conn.commit()
     conn.close()
@@ -349,117 +550,48 @@ def toggle_status(sticker_id: int, new_status: str):
     db_path = get_db_path()
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
-    cur.execute("UPDATE scheduled_stickers SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (new_status, sticker_id))
-    conn.commit()
-    conn.close()
-    return {"success": True, "status": new_status}
 
-def send_sticker_api(chat_id: int, sticker_input: str) -> dict:
-    """Send sticker directly to Telegram group chat using Bot API"""
-    token = get_bot_token()
-    if not token:
-        return {"ok": False, "error": "TELEGRAM_BOT_TOKEN not configured"}
-
-    resolved_sticker = resolve_sticker_identifier(sticker_input)
-
-    api_url = f"https://api.telegram.org/bot{token}/sendSticker"
-    payload = json.dumps({
-        "chat_id": chat_id,
-        "sticker": resolved_sticker
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        api_url,
-        data=payload,
-        headers={"Content-Type": "application/json"}
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            return data
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8")
-        try:
-            return json.loads(err_body)
-        except Exception:
-            return {"ok": False, "error": f"HTTP {e.code}: {err_body}"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-def send_now(sticker_id: int):
-    init_tables()
-    db_path = get_db_path()
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM scheduled_stickers WHERE id = ? LIMIT 1", (sticker_id,))
-    item = cur.fetchone()
-    if not item:
-        conn.close()
-        return {"success": False, "error": "Scheduled sticker not found"}
-
-    item = dict(item)
-    all_gcs = get_active_group_chats()
-
-    target_type = item.get("target_type") or "single"
-    targets = []
-    if target_type == "all_gc" or item.get("chat_id") == 0:
-        targets = all_gcs
-    elif target_type == "selected" and item.get("target_chat_ids"):
-        try:
-            sel_ids = json.loads(item["target_chat_ids"])
-            targets = [g for g in all_gcs if g["chat_id"] in sel_ids]
-        except Exception:
-            targets = all_gcs
-    else:
-        cid = item.get("chat_id")
-        title = item.get("chat_title") or f"Group {cid}"
-        targets = [{"chat_id": cid, "chat_title": title}]
-
-    if not targets:
-        targets = all_gcs
-
-    now_iso = datetime.now().isoformat()
-    success_count = 0
-    fail_count = 0
-    results = []
-
-    for gc in targets:
-        cid = gc["chat_id"]
-        title = gc["chat_title"]
-        result = send_sticker_api(cid, item["sticker_url"])
-        is_ok = result.get("ok", False)
-        status = "success" if is_ok else "failed"
-        details = "Sticker delivered to group chat successfully" if is_ok else result.get("description", result.get("error", "Unknown error"))
-
-        if is_ok:
-            success_count += 1
-        else:
-            fail_count += 1
-
+    if new_status == 'active':
+        now_str = datetime.now().strftime("%Y-%m-%dT%H:%M")
         cur.execute("""
-        INSERT INTO sticker_send_logs (scheduled_id, chat_id, chat_title, sticker_url, sent_at, status, details)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (sticker_id, cid, title, item["sticker_url"], now_iso, status, details))
+        UPDATE scheduled_stickers
+        SET status = ?, scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """, (new_status, now_str, sticker_id))
+        conn.commit()
+        conn.close()
 
-        results.append({"chat_id": cid, "chat_title": title, "ok": is_ok, "details": details})
+        # When activated, start sending immediately
+        try:
+            send_now(sticker_id)
+            conn2 = sqlite3.connect(db_path)
+            conn2.row_factory = sqlite3.Row
+            cur2 = conn2.cursor()
+            cur2.execute("SELECT repeat_interval FROM scheduled_stickers WHERE id = ?", (sticker_id,))
+            row = cur2.fetchone()
+            interval = row["repeat_interval"] if row else "5min"
+            delta = parse_interval_to_timedelta(interval)
+            next_time = (datetime.now() + delta).strftime("%Y-%m-%dT%H:%M")
+            cur2.execute("UPDATE scheduled_stickers SET scheduled_time = ? WHERE id = ?", (next_time, sticker_id))
+            conn2.commit()
+            conn2.close()
+        except Exception:
+            pass
 
-    if success_count > 0:
-        cur.execute("UPDATE scheduled_stickers SET last_sent_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (now_iso, sticker_id))
-
-    conn.commit()
-    conn.close()
-
-    return {
-        "success": success_count > 0,
-        "total_targets": len(targets),
-        "success_count": success_count,
-        "fail_count": fail_count,
-        "results": results,
-        "sent_at": now_iso
-    }
+        return {
+            "success": True,
+            "status": "active",
+            "message": "Sticker activated and sending started immediately!"
+        }
+    else:
+        cur.execute("""
+        UPDATE scheduled_stickers
+        SET status = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """, (new_status, sticker_id))
+        conn.commit()
+        conn.close()
+        return {"success": True, "status": new_status, "message": "Sticker paused"}
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
