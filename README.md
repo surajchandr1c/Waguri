@@ -244,14 +244,19 @@ General Commands:
 • /cleanservice [on|off] - Clean service messages (joins, leaves, pins)
 • /antispam [on|off] - Toggle repeated-message spam detection
 
-💼 Personal Auto-Reply (Telegram Business):
+🛡️ Group Chat (GC) Messaging Controls (Admin Only):
+• /setgcmsg <text> - Set custom GC greeting reply message
+• /resetgcmsg - Reset GC greeting message to default (Hii {user})
+• /gcmsg - View current GC greeting message status
+
+💼 Personal Auto-Reply (Telegram Business Secretary):
 • /personal - Open personal auto-reply settings dashboard
 • /autoreply_on - Enable personal auto-reply
 • /autoreply_off - Disable personal auto-reply
-• /setmessage <text> - Set custom reply message
+• /setmessage <text> - Set personal first-reply message (1-time initial setup)
 • /preview - Preview your auto-reply message
 • /mystatus - View auto-reply and connection status
-• /resetmessage - Reset reply to default template
+• /resetmessage - Reset reply template (Admin only once configured)
 • /exclude_user <id|@user> - Exclude user from auto-replies
 • /include_user <id|@user> - Re-allow excluded user
 • /business_stats - View secretary delivery & usage statistics
@@ -270,29 +275,33 @@ General Commands:
 • Daily Limits: Configurable daily reply caps (25 to 500 replies/day)
 • Reply Delay: Configurable delay (0s to 15s) before sending
 • Exclusion List: Prevent specific users or @usernames from receiving replies
+• Role-Based Isolation: Personal messages are configured once by users and thereafter only editable by Admins. GC messages are strictly restricted to Group Admins with zero user access.
 ```
 
 ---
 
 ## Command Reference
 
-### General & Personal Secretary Commands (`BotCommandScopeDefault`)
-- `/start` – Open private dashboard (in private) or send group welcome (in groups).
+### Personal Secretary & Private Commands (`BotCommandScopeAllPrivateChats`)
+- `/start` – Open private dashboard with interactive navigation.
 - `/help` – Interactive clickable command launcher and documentation.
 - `/personal` – Open interactive personal auto-reply dashboard.
-- `/autoreply_on` – Turn on personal auto-reply for connected account.
+- `/autoreply_on` – Turn on personal auto-reply for connected business account.
 - `/autoreply_off` – Turn off personal auto-reply.
-- `/setmessage <text>` – Set custom auto-reply template with sender placeholders.
-- `/preview` – Preview rendered auto-reply template.
-- `/mystatus` – Check business connection, auto-reply state, and daily delivery stats.
-- `/resetmessage` – Reset auto-reply text to default template.
+- `/setmessage <text>` – Set personal first-reply message (1-time user setup; subsequently locked to Administrators).
+- `/preview` – Preview rendered auto-reply template with sender placeholders.
+- `/mystatus` – Check business connection, auto-reply state, lock status, and daily delivery stats.
+- `/resetmessage` – Reset auto-reply text to default template (Admin-only if already configured).
 - `/exclude_user <id|@username>` – Blacklist user or @username from receiving auto-replies.
 - `/include_user <id|@username>` – Remove blacklist exclusion for a user.
 - `/business_stats` – View delivery metrics and global secretary stats.
 - `/about` – Information about Waguri's architecture.
 - `/contact` – Directs users to bot administrator `@lucky_paji`.
 
-### Group Management & Moderation (`BotCommandScopeAllChatAdministrators`)
+### Group Management & GC Messaging (`BotCommandScopeAllChatAdministrators`)
+- `/setgcmsg <text>` – Set custom group greeting/reply message for this group.
+- `/resetgcmsg` – Restore default group greeting (`Hii {user}`).
+- `/gcmsg` – View current group greeting message status and configuration.
 - `/settings` – Open the interactive inline management dashboard.
 - `/features` – View statuses of all moderation features for the current chat.
 - `/stats` – View isolated moderation statistics for the current chat.
@@ -315,6 +324,9 @@ Accessible only to Telegram User IDs configured in `BOT_OWNER_IDS`:
 - `/owner` – View platform scale, active chats, uptime, database health, and activity metrics.
 - `/owner broadcast <message>` – Send a rate-limited announcement across all registered chats.
 - `/owner emergency <feature> [on|off]` – Apply a global emergency feature override without mutating individual group settings.
+- `/admin_setmessage <user_id> <text>` (alias: `/setusermsg`) – Edit or set the personal auto-reply message for any user.
+- `/admin_resetmessage <user_id> [unlock]` – Reset any user's personal message to default and optionally unlock it.
+- `/admin_sendmessage <chat_id_or_user_id> <text>` (alias: `/sendpersonal`) – Send a direct message via the bot.
 
 ---
 
