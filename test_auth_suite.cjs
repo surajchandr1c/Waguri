@@ -107,7 +107,10 @@ async function runTestSuite() {
   const invalidEmailRes = await makeRequest('POST', '/api/admin/login', { email: 'not-an-email', password: 'password123' });
   assert(invalidEmailRes.statusCode === 400, `Malformed email rejected with HTTP 400 (Status: ${invalidEmailRes.statusCode})`);
 
-  const wrongCredsRes = await makeRequest('POST', '/api/admin/login', { email: 'admin@waguri.bot', password: 'WrongPassword@123' });
+  const TEST_EMAIL = process.env.ADMIN_EMAIL || 'waguri@gmail.com';
+  const TEST_PASSWORD = process.env.ADMIN_PASSWORD || '@#$WaguriBot';
+
+  const wrongCredsRes = await makeRequest('POST', '/api/admin/login', { email: TEST_EMAIL, password: 'WrongPassword@123' });
   assert(wrongCredsRes.statusCode === 401, `Incorrect password rejected with HTTP 401 (Status: ${wrongCredsRes.statusCode})`);
   const wrongJson = JSON.parse(wrongCredsRes.body);
   assert(wrongJson.error === 'Invalid email or password.', `Generic error message returned: "${wrongJson.error}"`);
@@ -115,13 +118,13 @@ async function runTestSuite() {
   // ---------------------------------------------------------------------------
   console.log("\n--- 5. Valid Admin Login & HttpOnly Cookie Issuance ---");
   const validLoginRes = await makeRequest('POST', '/api/admin/login', {
-    email: 'admin@waguri.bot',
-    password: 'WaguriAdmin@2026!',
+    email: TEST_EMAIL,
+    password: TEST_PASSWORD,
   });
   assert(validLoginRes.statusCode === 200, `Valid login returns HTTP 200 OK (Status: ${validLoginRes.statusCode})`);
   const validJson = JSON.parse(validLoginRes.body);
   assert(validJson.success === true, `Response indicates success: ${validJson.success}`);
-  assert(validJson.user?.email === 'admin@waguri.bot', `Response user email: ${validJson.user?.email}`);
+  assert(validJson.user?.email === TEST_EMAIL, `Response user email: ${validJson.user?.email}`);
   assert(validJson.passwordHash === undefined && validJson.user?.passwordHash === undefined, `Password hash is strictly NEVER exposed in response`);
 
   // Extract auth cookie
@@ -140,7 +143,7 @@ async function runTestSuite() {
   assert(authMeRes.statusCode === 200, `GET /api/admin/me with session returns HTTP 200 (Status: ${authMeRes.statusCode})`);
   const authMeJson = JSON.parse(authMeRes.body);
   assert(authMeJson.authenticated === true, `Session is authenticated: ${authMeJson.authenticated}`);
-  assert(authMeJson.user?.email === 'admin@waguri.bot', `Session user: ${authMeJson.user?.email}`);
+  assert(authMeJson.user?.email === TEST_EMAIL, `Session user: ${authMeJson.user?.email}`);
 
   const authDashboardRes = await makeRequest('GET', '/', null, authHeaders);
   assert(authDashboardRes.statusCode === 200, `GET / with session returns HTTP 200 OK (Dashboard accessible)`);
