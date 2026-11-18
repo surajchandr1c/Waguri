@@ -15,8 +15,21 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Waguri Bot - Telegram Moderation & Business Secretary Dashboard',
-  description: 'Official interactive documentation and commands dashboard for Waguri Telegram Bot (@Ms_Waguri_bot).',
+  title: 'Waguri Bot | Admin Dashboard',
+  description:
+    'Manage, monitor, and control your Telegram bot through Waguri Bot Admin Dashboard.',
+  icons: {
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/icon.png', sizes: '48x48', type: 'image/png' },
+      { url: '/icon-32.png', sizes: '32x32', type: 'image/png' },
+      { url: '/logo.png', sizes: 'any' },
+    ],
+    apple: [
+      { url: '/apple-icon.png', sizes: '180x180', type: 'image/png' },
+    ],
+    shortcut: ['/logo.png'],
+  },
 };
 
 export default function RootLayout({

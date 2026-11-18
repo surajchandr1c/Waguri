@@ -2,9 +2,9 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
 import { 
-  Bot, 
   Home, 
   Menu, 
   X, 
@@ -139,9 +139,16 @@ export default function Sidebar() {
             <Menu className="w-5 h-5" />
           </button>
 
-          <Link href="/" className="flex items-center gap-2 min-w-0">
-            <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center text-black font-bold shadow-sm shrink-0">
-              <Bot className="w-5 h-5 text-black" />
+          <Link href="/" className="flex items-center gap-2.5 min-w-0 group">
+            <div className="relative w-8 h-8 rounded-lg overflow-hidden border border-purple-500/30 bg-purple-950/40 flex items-center justify-center p-0.5 shadow-sm shrink-0 group-hover:border-purple-400 transition-colors">
+              <Image
+                src="/logo.png"
+                alt="Waguri Bot Logo"
+                width={32}
+                height={32}
+                priority
+                className="w-full h-full object-contain rounded-md"
+              />
             </div>
             <div className="truncate">
               <span className="font-bold text-sm text-white tracking-tight">Waguri</span>
@@ -193,13 +200,20 @@ export default function Sidebar() {
         {/* Logo & Brand Header with Mobile Close Button */}
         <div className="p-4 sm:p-5 border-b border-zinc-800 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3 group" onClick={() => setIsOpen(false)}>
-            <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center text-black font-bold shadow-md group-hover:scale-105 transition-transform">
-              <Bot className="w-6 h-6" />
+            <div className="relative w-10 h-10 rounded-xl overflow-hidden border border-purple-500/30 bg-purple-950/40 flex items-center justify-center p-1 shadow-md shadow-purple-950/40 group-hover:scale-105 group-hover:border-purple-400/60 transition-all duration-300 shrink-0">
+              <Image
+                src="/logo.png"
+                alt="Waguri Bot Logo"
+                width={40}
+                height={40}
+                priority
+                className="w-full h-full object-contain rounded-lg drop-shadow-[0_0_8px_rgba(168,85,247,0.5)]"
+              />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-lg text-white tracking-tight">Waguri Bot</span>
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700">
+                <span className="font-bold text-lg text-white tracking-tight group-hover:text-purple-200 transition-colors">Waguri Bot</span>
+                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-purple-950/60 text-purple-300 border border-purple-700/50">
                   v2.0
                 </span>
               </div>

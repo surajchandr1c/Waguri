@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import {
   Lock,
@@ -9,7 +10,6 @@ import {
   EyeOff,
   ShieldAlert,
   ShieldCheck,
-  Bot,
   ArrowRight,
   Loader2,
 } from 'lucide-react';
@@ -108,8 +108,15 @@ export default function LoginPage() {
 
           {/* Branding & Header Section */}
           <div className="text-center space-y-3 mb-6 login-stagger-1">
-            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-purple-600/20 to-purple-900/40 border border-purple-500/30 shadow-inner shadow-purple-500/20 text-purple-300">
-              <Bot className="w-7 h-7 drop-shadow-[0_0_12px_rgba(168,85,247,0.7)]" />
+            <div className="relative inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-purple-600/25 to-purple-950/60 border border-purple-500/40 p-1.5 shadow-lg shadow-purple-950/50 hover:scale-105 transition-transform duration-300 group">
+              <Image
+                src="/logo.png"
+                alt="Waguri Bot Logo"
+                width={56}
+                height={56}
+                priority
+                className="w-full h-full object-contain rounded-xl drop-shadow-[0_0_12px_rgba(168,85,247,0.7)]"
+              />
             </div>
 
             <div>

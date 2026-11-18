@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { ShieldCheck, Send, LogOut, Loader2 } from 'lucide-react';
 
@@ -46,9 +47,21 @@ export default function Header({ title, description, badge }: HeaderProps) {
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto shrink-0 flex-wrap">
-          <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-zinc-300">
-            <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
-            <span>Admin Authenticated</span>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-300 shadow-sm">
+            <div className="relative w-5 h-5 rounded-md overflow-hidden border border-purple-500/40 bg-purple-950/40 shrink-0">
+              <Image
+                src="/logo.png"
+                alt="Waguri Bot Logo"
+                width={20}
+                height={20}
+                className="w-full h-full object-contain"
+                priority
+              />
+            </div>
+            <div className="hidden md:flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
+              <span>Admin Authenticated</span>
+            </div>
           </div>
 
           <a
