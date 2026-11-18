@@ -246,17 +246,28 @@ def parse_interval_to_timedelta(interval: str) -> timedelta:
     except ValueError:
         return timedelta(minutes=30)
 
-def compute_next_datetime(base_dt_str: str, interval_str: str) -> str:
+def parse_dt(val: str | None) -> datetime | None:
+    if not val:
+        return None
+    s = str(val).strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(s[:19], fmt)
+        except ValueError:
+            pass
     try:
-        base_dt = datetime.fromisoformat(base_dt_str)
+        return datetime.fromisoformat(s)
     except Exception:
-        base_dt = datetime.now()
+        return None
+
+def compute_next_datetime(base_dt_str: str, interval_str: str) -> str:
+    base_dt = parse_dt(base_dt_str) or datetime.now()
     delta = parse_interval_to_timedelta(interval_str)
     next_dt = base_dt + delta
     now = datetime.now()
     while next_dt <= now:
         next_dt += delta
-    return next_dt.strftime("%Y-%m-%dT%H:%M")
+    return next_dt.strftime("%Y-%m-%dT%H:%M:%S")
 
 def process_due_promotions():
     init_tables()
@@ -265,31 +276,39 @@ def process_due_promotions():
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M")
-
-    cur.execute("""
-    SELECT * FROM scheduled_promotions
-    WHERE status = 'active' AND scheduled_time <= ?
-    """, (now_iso,))
-
-    due_items = [dict(r) for r in cur.fetchall()]
+    cur.execute("SELECT * FROM scheduled_promotions WHERE status = 'active'")
+    active_items = [dict(r) for r in cur.fetchall()]
     conn.close()
 
-    for item in due_items:
-        last_sent = item.get("last_sent_at")
-        if last_sent and last_sent[:16] >= item["scheduled_time"][:16]:
+    now = datetime.now()
+    results = []
+
+    for item in active_items:
+        interval_str = item.get("repeat_interval", "daily")
+        interval_delta = parse_interval_to_timedelta(interval_str)
+
+        sched_dt = parse_dt(item.get("scheduled_time")) or now
+        last_sent_dt = parse_dt(item.get("last_sent_at"))
+
+        # 1. Has scheduled time arrived?
+        if now < sched_dt:
             continue
 
-        broadcast_promotion(item["id"])
+        # 2. Strict gap check
+        if last_sent_dt:
+            min_cooldown_seconds = max(10, interval_delta.total_seconds() - 15)
+            if (now - last_sent_dt).total_seconds() < min_cooldown_seconds:
+                continue
+
+        res = broadcast_promotion(item["id"])
+        results.append({"id": item["id"], "result": res})
 
         # Recurrence handling
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
 
         if item.get("schedule_type") == "recurring":
-            interval = item.get("repeat_interval", "daily")
-            next_time_str = compute_next_datetime(item["scheduled_time"], interval)
-
+            next_time_str = (datetime.now() + interval_delta).strftime("%Y-%m-%dT%H:%M:%S")
             cur.execute("""
             UPDATE scheduled_promotions
             SET scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
@@ -304,6 +323,8 @@ def process_due_promotions():
 
         conn.commit()
         conn.close()
+
+    return results
 
 def list_all():
     init_tables()

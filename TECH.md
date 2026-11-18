@@ -117,8 +117,9 @@ flowchart TD
 
 | Capability | Technical Mechanism |
 | :--- | :--- |
-| **Worker Execution** | Background daemon thread (`schedule_worker`) runs in [bot.py](file:///c:/Users/Suraj/Desktop/New%20folder/bot/bot.py) alongside the main bot event loop, checking due items every 15 seconds. |
-| **Interval Parser** | Custom timedelta parser supporting short and long intervals: `3min`, `5min`, `10min`, `15min`, `30min`, `1 hr`, `2h`, `4h`, `6h`, `12h`, `daily`, `weekly`. |
+| **Worker Execution** | Dedicated daemon scheduler ([scheduler_daemon.py](file:///c:/Users/Suraj/Desktop/New%20folder/bot/scheduler_daemon.py)) and background worker thread in [bot.py](file:///c:/Users/Suraj/Desktop/New%20folder/bot/bot.py) checking due broadcasts with 5-second precision. |
+| **Interval Parser & Strict Time Gap** | Strict seconds-level precision (`parse_dt`, `interval_delta`) supporting exact gaps: `3min`, `5min`, `10min`, `15min`, `30min`, `1 hr`, `2h`, `4h`, `6h`, `12h`, `daily`, `weekly`. Automatically prevents early or duplicate firings using dynamic cooldown checks. |
+| **Dynamic Sticker Pack Rotation** | Connects to Telegram `getStickerSet` to query all stickers in a set; cycles sequentially (`(index + 1) % total`) so every interval sends a different sticker from the pack. |
 | **Time Drift Protection** | Computes `compute_next_datetime()` advancing in a `while next_dt <= now` loop to prevent back-to-back duplicate firings if the bot was offline. |
 | **Chat Routing** | Evaluates `target_type`: targets a `single` chat, `selected` list of chats, or dynamically queries active groups with `all_gc`. |
 | **Frontend Isolation** | All scheduling configurations, edits, and intervals are managed **exclusively through the Next.js web frontend** with zero commands or keyboards exposed in Telegram chats. |

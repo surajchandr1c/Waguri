@@ -201,27 +201,34 @@ def main() -> None:
 
         # Start silent background scheduler thread for frontend-configured due promotions, stickers, and shayari
         def schedule_worker():
-            time.sleep(5)  # initial delay
+            time.sleep(3)  # initial delay
+            logger.info("Silent background schedule worker thread started (polling due schedules every 5s).")
             while True:
                 try:
                     from promotions_manager import process_due_promotions
-                    process_due_promotions()
+                    res_p = process_due_promotions()
+                    if res_p:
+                        logger.info("Dispatched due promotions: %s", res_p)
                 except Exception as e:
-                    logger.debug("Background promotion check: %s", e)
+                    logger.warning("Background promotion check error: %s", e)
 
                 try:
                     from stickers_manager import process_due_stickers
-                    process_due_stickers()
+                    res_s = process_due_stickers()
+                    if res_s:
+                        logger.info("Dispatched due stickers: %s", res_s)
                 except Exception as e:
-                    logger.debug("Background sticker check: %s", e)
+                    logger.warning("Background sticker check error: %s", e)
 
                 try:
                     from shayari_manager import process_due_shayari
-                    process_due_shayari()
+                    res_sh = process_due_shayari()
+                    if res_sh:
+                        logger.info("Dispatched due shayari: %s", res_sh)
                 except Exception as e:
-                    logger.debug("Background shayari check: %s", e)
+                    logger.warning("Background shayari check error: %s", e)
 
-                time.sleep(15)
+                time.sleep(5)
 
         sched_thread = threading.Thread(target=schedule_worker, daemon=True)
         sched_thread.start()

@@ -75,7 +75,7 @@ export default function StickersPage() {
   const [customChatId, setCustomChatId] = useState<string>('');
   const [stickerUrl, setStickerUrl] = useState<string>('');
   const [stickerName, setStickerName] = useState<string>('');
-  const [repeatInterval, setRepeatInterval] = useState<string>('5min');
+  const [repeatInterval, setRepeatInterval] = useState<string>('3min');
 
   // Edit State
   const [editingSticker, setEditingSticker] = useState<ScheduledStickerItem | null>(null);
@@ -83,7 +83,7 @@ export default function StickersPage() {
   const [editSelectedChatId, setEditSelectedChatId] = useState<string>('');
   const [editStickerUrl, setEditStickerUrl] = useState<string>('');
   const [editStickerName, setEditStickerName] = useState<string>('');
-  const [editRepeatInterval, setEditRepeatInterval] = useState<string>('5min');
+  const [editRepeatInterval, setEditRepeatInterval] = useState<string>('3min');
   const [editStatus, setEditStatus] = useState<'active' | 'paused' | 'completed'>('active');
   const [savingEdit, setSavingEdit] = useState(false);
 

@@ -39,11 +39,11 @@ def init_tables():
         chat_title TEXT NOT NULL DEFAULT '',
         sticker_url TEXT NOT NULL,
         sticker_name TEXT,
-        target_type TEXT DEFAULT 'single',
+        target_type TEXT DEFAULT 'all_gc',
         target_chat_ids TEXT,
         schedule_type TEXT DEFAULT 'recurring',
         scheduled_time TEXT NOT NULL,
-        repeat_interval TEXT DEFAULT '5min',
+        repeat_interval TEXT DEFAULT '3min',
         status TEXT DEFAULT 'active',
         last_sent_at TEXT,
         sticker_pack_name TEXT,
@@ -65,7 +65,6 @@ def init_tables():
     )
     """)
 
-    # Check and add columns safely if missing
     cur.execute("PRAGMA table_info(scheduled_stickers)")
     cols = [r[1] for r in cur.fetchall()]
     if "target_type" not in cols:
@@ -94,7 +93,7 @@ def init_tables():
 
 def parse_interval_to_timedelta(interval: str) -> timedelta:
     if not interval or interval == "none":
-        return timedelta(minutes=5)
+        return timedelta(minutes=3)
     s = str(interval).strip().lower().replace(" ", "")
     if s in ("daily", "day"):
         return timedelta(days=1)
@@ -132,19 +131,21 @@ def parse_interval_to_timedelta(interval: str) -> timedelta:
         val = int(s)
         return timedelta(minutes=val)
     except ValueError:
-        return timedelta(minutes=5)
+        return timedelta(minutes=3)
 
-def compute_next_datetime(base_dt_str: str, interval_str: str) -> str:
+def parse_dt(val: str | None) -> datetime | None:
+    if not val:
+        return None
+    s = str(val).strip()
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(s[:19], fmt)
+        except ValueError:
+            pass
     try:
-        base_dt = datetime.fromisoformat(base_dt_str)
+        return datetime.fromisoformat(s)
     except Exception:
-        base_dt = datetime.now()
-    delta = parse_interval_to_timedelta(interval_str)
-    next_dt = base_dt + delta
-    now = datetime.now()
-    while next_dt <= now:
-        next_dt += delta
-    return next_dt.strftime("%Y-%m-%dT%H:%M")
+        return None
 
 def get_active_group_chats():
     db_path = get_db_path()
@@ -351,7 +352,7 @@ def send_now(sticker_id: int):
 def process_due_stickers():
     """
     Silent background checker: triggers stickers that are active and due,
-    sending a different sticker from the pack at every interval.
+    strictly respecting the exact time gap (e.g. 3 min, 5 min, 10 min).
     """
     init_tables()
     db_path = get_db_path()
@@ -359,45 +360,49 @@ def process_due_stickers():
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
 
-    now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M")
-
-    cur.execute("""
-    SELECT * FROM scheduled_stickers
-    WHERE status = 'active' AND scheduled_time <= ?
-    """, (now_iso,))
-
-    due_items = [dict(r) for r in cur.fetchall()]
+    cur.execute("SELECT * FROM scheduled_stickers WHERE status = 'active'")
+    active_items = [dict(r) for r in cur.fetchall()]
     conn.close()
 
+    now = datetime.now()
     results = []
-    for item in due_items:
-        last_sent = item.get("last_sent_at")
-        interval = item.get("repeat_interval", "5min")
 
-        # Avoid duplicate firing within the exact same minute
-        if last_sent and last_sent[:16] >= now_iso:
-            next_time_str = compute_next_datetime(now_iso, interval)
-            conn = sqlite3.connect(db_path)
-            conn.execute("UPDATE scheduled_stickers SET scheduled_time = ? WHERE id = ?", (next_time_str, item["id"]))
-            conn.commit()
-            conn.close()
+    for item in active_items:
+        interval_str = item.get("repeat_interval", "3min")
+        interval_delta = parse_interval_to_timedelta(interval_str)
+
+        sched_time_str = item.get("scheduled_time")
+        sched_dt = parse_dt(sched_time_str) or now
+
+        last_sent_str = item.get("last_sent_at")
+        last_sent_dt = parse_dt(last_sent_str)
+
+        # 1. Has the scheduled time arrived?
+        if now < sched_dt:
             continue
 
-        # Send sticker (advances to next sticker in pack)
+        # 2. Strict time gap check: ensure at least (interval - 15 seconds) has elapsed since last delivery
+        if last_sent_dt:
+            min_cooldown_seconds = max(10, interval_delta.total_seconds() - 15)
+            elapsed_seconds = (now - last_sent_dt).total_seconds()
+            if elapsed_seconds < min_cooldown_seconds:
+                continue
+
+        # Send sticker now (automatically advances to the next sticker in the pack)
         send_res = send_now(item["id"])
         results.append({"id": item["id"], "result": send_res})
 
-        # Advance scheduled_time to next interval
+        # Calculate exact next send time: from now + interval_delta!
+        next_dt = datetime.now() + interval_delta
+        next_dt_str = next_dt.strftime("%Y-%m-%dT%H:%M:%S")
+
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
-        next_time_str = compute_next_datetime(now_iso, interval)
-
         cur.execute("""
         UPDATE scheduled_stickers
         SET scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-        """, (next_time_str, item["id"]))
-
+        """, (next_dt_str, item["id"]))
         conn.commit()
         conn.close()
 
@@ -443,8 +448,7 @@ def add_sticker(data: dict):
     target_chat_ids = json.dumps(data.get("target_chat_ids", []))
     sticker_url = data.get("sticker_url", "").strip()
     sticker_name = data.get("sticker_name", "").strip() or "GC Sticker Broadcast"
-    schedule_type = "recurring"
-    repeat_interval = data.get("repeat_interval", "5min")
+    repeat_interval = data.get("repeat_interval", "3min")
     chat_title = data.get("chat_title", "").strip()
 
     if target_type == "all_gc":
@@ -454,11 +458,12 @@ def add_sticker(data: dict):
         row = cur.fetchone()
         chat_title = row[0] if row else f"Group {chat_id}"
 
-    # Extract pack name if link or pack provided
     pack_name = extract_pack_name(sticker_url)
 
+    interval_delta = parse_interval_to_timedelta(repeat_interval)
     now_dt = datetime.now()
-    now_str = now_dt.strftime("%Y-%m-%dT%H:%M")
+    # Next send scheduled for exactly now + interval_delta
+    next_time_str = (now_dt + interval_delta).strftime("%Y-%m-%dT%H:%M:%S")
 
     cur.execute("""
     INSERT INTO scheduled_stickers (
@@ -467,29 +472,22 @@ def add_sticker(data: dict):
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 0)
     """, (chat_id, chat_title, sticker_url, sticker_name, target_type, target_chat_ids,
-          schedule_type, now_str, repeat_interval, pack_name))
+          'recurring', next_time_str, repeat_interval, pack_name))
 
     new_id = cur.lastrowid
     conn.commit()
     conn.close()
 
-    # Automatically start sending sticker right now when active
+    # Automatically send the first sticker right away when activated
     try:
         send_now(new_id)
-        # Advance scheduled_time to next interval
-        delta = parse_interval_to_timedelta(repeat_interval)
-        next_time = (datetime.now() + delta).strftime("%Y-%m-%dT%H:%M")
-        conn2 = sqlite3.connect(db_path)
-        conn2.execute("UPDATE scheduled_stickers SET scheduled_time = ? WHERE id = ?", (next_time, new_id))
-        conn2.commit()
-        conn2.close()
     except Exception:
         pass
 
     return {
         "success": True,
         "id": new_id,
-        "message": f"Sticker schedule activated! First sticker sent; next will send every {repeat_interval}."
+        "message": f"Sticker activated! First sticker sent now; next sticker will send in {repeat_interval}."
     }
 
 def edit_sticker(sticker_id: int, data: dict):
@@ -509,7 +507,7 @@ def edit_sticker(sticker_id: int, data: dict):
     target_chat_ids = json.dumps(data.get("target_chat_ids", []))
     sticker_url = data.get("sticker_url", "").strip()
     sticker_name = data.get("sticker_name", "").strip() or "GC Sticker Broadcast"
-    repeat_interval = data.get("repeat_interval", "5min")
+    repeat_interval = data.get("repeat_interval", "3min")
     status = data.get("status", "active")
 
     if target_type == "all_gc":
@@ -520,15 +518,17 @@ def edit_sticker(sticker_id: int, data: dict):
         chat_title = row[0] if row else f"Group {chat_id}"
 
     pack_name = extract_pack_name(sticker_url)
+    interval_delta = parse_interval_to_timedelta(repeat_interval)
+    next_time_str = (datetime.now() + interval_delta).strftime("%Y-%m-%dT%H:%M:%S")
 
     cur.execute("""
     UPDATE scheduled_stickers
     SET target_type = ?, chat_id = ?, chat_title = ?, target_chat_ids = ?,
         sticker_url = ?, sticker_name = ?, repeat_interval = ?, status = ?,
-        sticker_pack_name = ?, updated_at = CURRENT_TIMESTAMP
+        sticker_pack_name = ?, scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
     """, (target_type, chat_id, chat_title, target_chat_ids, sticker_url, sticker_name,
-          repeat_interval, status, pack_name, sticker_id))
+          repeat_interval, status, pack_name, next_time_str, sticker_id))
 
     conn.commit()
     conn.close()
@@ -552,46 +552,42 @@ def toggle_status(sticker_id: int, new_status: str):
     cur = conn.cursor()
 
     if new_status == 'active':
-        now_str = datetime.now().strftime("%Y-%m-%dT%H:%M")
+        cur.execute("SELECT repeat_interval FROM scheduled_stickers WHERE id = ?", (sticker_id,))
+        row = cur.fetchone()
+        interval = row[0] if row else "3min"
+        interval_delta = parse_interval_to_timedelta(interval)
+
+        # Set next send time to exactly now + interval_delta
+        next_time_str = (datetime.now() + interval_delta).strftime("%Y-%m-%dT%H:%M:%S")
+
         cur.execute("""
         UPDATE scheduled_stickers
-        SET status = ?, scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
+        SET status = 'active', scheduled_time = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-        """, (new_status, now_str, sticker_id))
+        """, (next_time_str, sticker_id))
         conn.commit()
         conn.close()
 
-        # When activated, start sending immediately
+        # Send first sticker immediately upon activation
         try:
             send_now(sticker_id)
-            conn2 = sqlite3.connect(db_path)
-            conn2.row_factory = sqlite3.Row
-            cur2 = conn2.cursor()
-            cur2.execute("SELECT repeat_interval FROM scheduled_stickers WHERE id = ?", (sticker_id,))
-            row = cur2.fetchone()
-            interval = row["repeat_interval"] if row else "5min"
-            delta = parse_interval_to_timedelta(interval)
-            next_time = (datetime.now() + delta).strftime("%Y-%m-%dT%H:%M")
-            cur2.execute("UPDATE scheduled_stickers SET scheduled_time = ? WHERE id = ?", (next_time, sticker_id))
-            conn2.commit()
-            conn2.close()
         except Exception:
             pass
 
         return {
             "success": True,
             "status": "active",
-            "message": "Sticker activated and sending started immediately!"
+            "message": f"Sticker activated! First sticker sent now; next will send in {interval}."
         }
     else:
         cur.execute("""
         UPDATE scheduled_stickers
-        SET status = ?, updated_at = CURRENT_TIMESTAMP
+        SET status = 'paused', updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-        """, (new_status, sticker_id))
+        """, (sticker_id,))
         conn.commit()
         conn.close()
-        return {"success": True, "status": new_status, "message": "Sticker paused"}
+        return {"success": True, "status": "paused", "message": "Sticker paused"}
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
