@@ -4,7 +4,6 @@ import React, { useState, useEffect } from 'react';
 import Header from '@/components/Header';
 import { 
   Database, 
-  Key, 
   CheckCircle2, 
   Shield, 
   Save, 
@@ -130,14 +129,6 @@ export default function SettingsPage() {
       setTimeout(() => setNotification(null), 5000);
     }
   };
-
-  const envVars = [
-    { key: 'BOT_TOKEN', desc: 'Telegram Bot API Token from @BotFather', type: 'Required', example: '8840030276:AAE0dSM...' },
-    { key: 'BOT_OWNER_IDS', desc: 'Superadmin Telegram user IDs (comma-separated)', type: 'Required', example: '8996111602' },
-    { key: 'MONGODB_URI', desc: 'MongoDB Atlas connection URI', type: 'Required', example: 'mongodb+srv://sunbaby7319_db_user:...@waguri.y7u511m.mongodb.net/waguri_db' },
-    { key: 'MONGODB_DB_NAME', desc: 'Primary MongoDB database name', type: 'Optional', example: 'waguri_db' },
-    { key: 'TELEGRAM_CONNECT_TIMEOUT', desc: 'HTTP connection timeout in seconds', type: 'Optional', example: '30.0' },
-  ];
 
   return (
     <div className="flex-1 flex flex-col bg-black">
@@ -466,45 +457,6 @@ export default function SettingsPage() {
             </button>
           </div>
         </form>
-
-        {/* Environment Variables Reference */}
-        <div className="p-5 rounded-2xl bg-zinc-900/80 border border-zinc-800 space-y-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-zinc-300">
-            <Key className="w-4 h-4 text-white" />
-            <span>Environment Variables (.env)</span>
-          </div>
-
-          <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-950">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-zinc-800 bg-zinc-900/60 text-zinc-400 font-semibold">
-                  <th className="py-2.5 px-3">Variable Key</th>
-                  <th className="py-2.5 px-3">Requirement</th>
-                  <th className="py-2.5 px-3">Description</th>
-                  <th className="py-2.5 px-3">Example</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-800">
-                {envVars.map((v) => (
-                  <tr key={v.key} className="hover:bg-zinc-900/40 transition-colors">
-                    <td className="py-2.5 px-3 font-mono font-bold text-white">{v.key}</td>
-                    <td className="py-2.5 px-3">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${
-                        v.type === 'Required' 
-                          ? 'bg-white text-black font-bold border-white' 
-                          : 'bg-zinc-800 text-zinc-300 border-zinc-700'
-                      }`}>
-                        {v.type}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 text-zinc-300">{v.desc}</td>
-                    <td className="py-2.5 px-3 font-mono text-zinc-400">{v.example}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
 
       </div>
     </div>
