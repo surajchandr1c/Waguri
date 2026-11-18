@@ -238,10 +238,12 @@ class AbuseDetector:
             intersection = singles.intersection(token_set)
             if intersection:
                 tier = "exact_keyword"
-                if cat in ("sexual_harassment", "rape_harassment"):
+                if cat in ("sexual_harassment", "rape_harassment", "additional_harassment"):
                     tier = "sexual_harassment"
-                elif cat == "threatening_language":
+                elif cat in ("threatening_language", "additional_violence"):
                     tier = "explicit_threat"
+                elif cat in ("physical_assault",):
+                    tier = "physical_assault"
                 for word in intersection:
                     # Check if token came from collapsed or leet streams (obfuscated)
                     is_obf = word not in re.findall(r"\w+", norm["clean_nfkc"])
@@ -250,9 +252,19 @@ class AbuseDetector:
         # Check multi-word dictionary phrases
         for cat, multis in self._multi_words.items():
             for phrase in multis:
+                tier = "explicit_phrase"
+                if cat in ("sexual_harassment", "rape_harassment", "additional_harassment"):
+                    tier = "sexual_harassment"
+                elif cat in ("threatening_language", "additional_violence"):
+                    tier = "explicit_threat"
+                elif cat in ("physical_assault",):
+                    tier = "physical_assault"
+
+                phrase_pattern = rf"(?<![a-zA-Z0-9]){re.escape(phrase)}(?![a-zA-Z0-9])"
                 for s in streams_to_check:
-                    if re.search(rf"\b{re.escape(phrase)}\b", s):
-                        record_match("explicit_phrase", cat, phrase)
+                    if re.search(phrase_pattern, s):
+                        record_match(tier, cat, phrase)
+                        break
 
         # 5. Controlled Fuzzy Matching for Intentional Misspellings
         # Only checks tokens with length >= 6 against dictionary slurs with length >= 6

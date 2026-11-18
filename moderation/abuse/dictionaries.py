@@ -523,4 +523,157 @@ DEVANAGARI_TRANSLITERATION_MAP: Dict[str, str] = {
     "गांड": "gaand",
     "चूत": "choot",
     "लंड": "lund",
+    "भाड़ में जा": "bhad me ja",
+    "गांड मार": "gaand mara",
+    "तेरी बहन": "teri behen",
+    "तेरी माँ": "teri maa",
+    "बहन की चूत": "behen ki chut",
+    "माँ की चूत": "maa ki chut",
+    "सुअर": "suar",
+    "कुत्ती": "kutti",
+    "लवड़े": "lavde",
+    "चुतिया": "chutiya",
+    "भोसड़िका": "bhosdika",
+    "भोसड़ी": "bhosdi",
+    "मदरचोद": "madarchod",
 }
+
+
+# =============================================================================
+# Additional Keywords for Abuse Detection & Moderation
+# =============================================================================
+
+ADDITIONAL_SEXUAL_WORDS = [
+    "fucking", "fucked", "fucker", "fuckers",
+    "motherfucking", "motherfuckers",
+    "shithead", "shitface", "bullshitter",
+    "dickhead", "dickface", "dickwad",
+    "piss off", "pissed", "wanker",
+    "twat", "prick", "slut", "sluts",
+    "whore", "whores", "skank", "skanky",
+    "pervert", "perverted", "perv",
+    "horny", "horniness", "thirsty",
+    "orgasm", "orgasmic", "ejaculation",
+    "ejaculate", "masturbating",
+    "masturbator", "prostitute",
+    "prostitution", "brothel",
+    "sexual fantasy", "explicit photos",
+    "send nudes", "show your body",
+    "sex chat", "sexting", "sextortion",
+    "oral sex", "threesome", "fetish",
+    "kinky", "penetration"
+]
+ADDITIONAL_HARASSMENT_WORDS = [
+    "sexual predator", "sexually abused",
+    "sexual exploitation", "sexual coercion",
+    "sexual blackmail", "sexual intimidation",
+    "unwanted touching", "inappropriate touching",
+    "forced kissing", "forced intimacy",
+    "rape threat", "rape fantasy",
+    "rape joke", "sexual blackmail",
+    "child grooming", "online grooming",
+    "grooming children", "child exploitation",
+    "child pornography", "child sexual abuse",
+    "nonconsensual image", "revenge porn",
+    "upskirting", "voyeurism",
+    "sexual extortion", "sexual intimidation",
+    "unwanted advances", "lewd comments",
+    "inappropriate advances", "sexual stalking",
+    "forced intercourse", "sexual violence",
+    "molesting", "molested", "molester",
+    "raping", "rapist", "raped"
+]
+ADDITIONAL_VIOLENCE_WORDS = [
+    "beat the shit out of you",
+    "i will destroy you",
+    "i will kill you",
+    "kill yourself",
+    "go die",
+    "you deserve to die",
+    "i will smash your face",
+    "break your bones",
+    "i will stab you",
+    "i will shoot you",
+    "physical violence",
+    "physical abuse",
+    "domestic violence",
+    "hit you",
+    "punch you",
+    "kick you",
+    "choke you",
+    "strangle you",
+    "threatening to kill",
+    "death threat",
+    "violent threat",
+    "attack your family",
+    "harm your family"
+]
+ADDITIONAL_ABUSE_WORDS = [
+    "dumbass", "jackass", "smartass",
+    "asshat", "assclown", "dipshit",
+    "dumbshit", "bullshitter",
+    "fuckwit", "douche", "douchebag",
+    "scumbag", "piece of crap",
+    "piece of shit", "son of a bitch",
+    "bitchass", "shitbag", "shithead",
+    "fatass", "dickhead", "moron",
+    "imbecile", "idiotic", "worthless",
+    "trash human", "useless bastard",
+    "go to hell", "screw your life"
+]
+ADDITIONAL_HINGLISH_WORDS = [
+    "madarchod", "madarchod", "maderchod",
+    "madharchod", "m@darchod",
+    "behenchod", "bhenchod", "bhen ke lode",
+    "behen ke lode", "behen ke laude",
+    "bhosdike", "bhosdiwale", "bhosadike",
+    "bhosdiwala", "bhosdika",
+    "chutiya", "chutiyapa", "chutiyon",
+    "chutiye", "chutmarike",
+    "gaand faad", "gaand mara",
+    "gand mara", "gandu", "ganduu",
+    "lund", "lodu", "lauda", "lavda",
+    "lavde", "lode", "lode ke",
+    "randi", "randwa", "randibaaz",
+    "harami", "haraami", "kamina",
+    "kamine", "kaminey", "kutte",
+    "kutti", "suar", "saale", "sala",
+    "teri maa", "teri behen",
+    "maa ki chut", "behen ki chut",
+    "maa chod", "maa ch*d",
+    "behen chod", "bhen ch*d",
+    "gand faad dunga", "teri aukaat",
+    "teri gaand", "teri mkc", "teri bkc"
+]
+HINDI_WORDS = [
+    "मादरचोद", "मादरचोद", "मदरचोद",
+    "बहनचोद", "बहनचोद", "भेनचोद",
+    "भोसड़ीके", "भोसड़ी", "भोसड़िका",
+    "चूतिया", "चूतिये", "चुतिया",
+    "गांडू", "गांड", "लंड",
+    "लौड़ा", "लवड़े", "रंडी",
+    "हरामी", "कमीना", "कमीने",
+    "कुत्ता", "कुत्ती", "सुअर",
+    "माँ की चूत", "बहन की चूत",
+    "तेरी माँ", "तेरी बहन",
+    "गांड मार", "भाड़ में जा"
+]
+
+# Update existing core sets
+SEXUAL_VULGARITY.update(ADDITIONAL_SEXUAL_WORDS)
+SEXUAL_HARASSMENT.update(ADDITIONAL_HARASSMENT_WORDS)
+PHYSICAL_ASSAULT.update(ADDITIONAL_VIOLENCE_WORDS)
+THREATENING_LANGUAGE.update(ADDITIONAL_VIOLENCE_WORDS)
+GENERAL_ABUSIVE.update(ADDITIONAL_ABUSE_WORDS)
+HINGLISH_ABUSIVE.update(ADDITIONAL_HINGLISH_WORDS)
+HINDI_ABUSIVE.update(HINDI_WORDS)
+
+# Register new dictionaries
+CATEGORIZED_DICTIONARIES.update({
+    "additional_sexual": set(ADDITIONAL_SEXUAL_WORDS),
+    "additional_harassment": set(ADDITIONAL_HARASSMENT_WORDS),
+    "additional_violence": set(ADDITIONAL_VIOLENCE_WORDS),
+    "additional_abuse": set(ADDITIONAL_ABUSE_WORDS),
+    "additional_hinglish": set(ADDITIONAL_HINGLISH_WORDS),
+    "hindi_words": set(HINDI_WORDS),
+})

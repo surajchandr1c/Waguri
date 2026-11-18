@@ -244,6 +244,11 @@ class TextNormalizer:
             words = re.findall(r"[\w]+", stream, re.UNICODE)
             for w in words:
                 token_set.add(w)
+            # Also extract whitespace-separated words with punctuation stripping (preserves Devanagari combining marks & symbols)
+            for t in stream.split():
+                clean_t = t.strip("""!"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~।॥,.""")
+                if clean_t:
+                    token_set.add(clean_t)
 
         return {
             "raw": text,
