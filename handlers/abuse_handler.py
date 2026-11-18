@@ -350,8 +350,8 @@ async def abuse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
       /abuse off                - Disable Abuse moderation
       /abuse status             - View current status and detection settings
       /abuse words              - List custom blocked and allowed words
-      /abuse addword <word>     - Add custom blocked word
-      /abuse removeword <word>  - Remove custom keyword
+      /abuse addword <words>    - Add custom blocked word(s) (comma-separated supported)
+      /abuse removeword <words> - Remove custom keyword(s) (comma-separated supported)
       /abuse warnings [@user|id]- Check user's abuse warnings
       /abuse reset [@user|id]   - Reset user's abuse warnings
       /abuse settings           - View / adjust Abuse sensitivity and limits
@@ -387,8 +387,8 @@ async def abuse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "• <code>/abuse limit &lt;number&gt;</code> - Set warnings before mute (e.g. 1)\n"
             "• <code>/abuse status</code> - Check system status & statistics\n"
             "• <code>/abuse words</code> - View custom blocked/allowed keywords\n"
-            "• <code>/abuse addword &lt;word&gt;</code> - Add custom blocked keyword\n"
-            "• <code>/abuse removeword &lt;word&gt;</code> - Remove custom keyword\n"
+            "• <code>/abuse addword &lt;word1, word2, ...&gt;</code> - Add custom blocked keyword(s)\n"
+            "• <code>/abuse removeword &lt;word1, word2, ...&gt;</code> - Remove custom keyword(s)\n"
             "• <code>/abuse warnings [@user|id]</code> - Check member warnings\n"
             "• <code>/abuse reset [@user|id]</code> - Clear member warnings\n"
             "• <code>/abuse settings</code> - View sensitivity & mute configuration\n"
@@ -455,42 +455,95 @@ async def abuse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"📝 <b>Abuse Custom Keywords</b>\n\n"
             f"🚫 <b>Blocked Keywords ({len(blocked_words)}):</b>\n{blocked_display}\n\n"
             f"✅ <b>Whitelisted Keywords ({len(allowed_words)}):</b>\n{allowed_display}\n\n"
-            f"<i>To add a word:</i> <code>/abuse addword &lt;word&gt;</code>\n"
-            f"<i>To remove a word:</i> <code>/abuse removeword &lt;word&gt;</code>"
+            f"<i>To add words:</i> <code>/abuse addword &lt;word1, word2, ...&gt;</code>\n"
+            f"<i>To remove words:</i> <code>/abuse removeword &lt;word1, word2, ...&gt;</code>"
         )
         await message.reply_text(words_text, parse_mode=ParseMode.HTML)
         return
 
-    # 5. /abuse addword <word>
+    # 5. /abuse addword <word1, word2, ...>
     elif subcmd == "addword":
         if len(args) < 2:
-            await message.reply_text("Usage: <code>/abuse addword &lt;word&gt;</code>", parse_mode=ParseMode.HTML)
+            await message.reply_text(
+                "Usage: <code>/abuse addword &lt;word&gt;</code> or separated by commas: <code>/abuse addword badword1, badword2, badword3</code>",
+                parse_mode=ParseMode.HTML
+            )
             return
-        word = " ".join(args[1:]).strip().lower()
-        if len(word) < 2:
-            await message.reply_text("Keyword must be at least 2 characters long.")
+        raw_text = " ".join(args[1:])
+        words = [w.strip().lower() for w in raw_text.split(",") if w.strip()]
+        if not words:
+            await message.reply_text("Usage: <code>/abuse addword &lt;word1, word2, ...&gt;</code>", parse_mode=ParseMode.HTML)
             return
 
-        success = add_abuse_custom_keyword(chat.id, word, is_blocked=True)
-        if success:
-            log_moderation_event(chat.id, user.id if user else 0, "ABUSE_WORD_ADDED", f"Added blocked word '{word}'")
-            await message.reply_text(f"✅ Added <code>{html.escape(word)}</code> to custom blocked keywords for this group.", parse_mode=ParseMode.HTML)
-        else:
-            await message.reply_text("Failed to add keyword.")
+        unique_words = list(dict.fromkeys(words))
+        added = []
+        too_short = []
+        failed = []
+
+        for word in unique_words:
+            if len(word) < 2:
+                too_short.append(word)
+                continue
+            success = add_abuse_custom_keyword(chat.id, word, is_blocked=True)
+            if success:
+                log_moderation_event(chat.id, user.id if user else 0, "ABUSE_WORD_ADDED", f"Added blocked word '{word}'")
+                added.append(word)
+            else:
+                failed.append(word)
+
+        response_lines = []
+        if added:
+            if len(added) == 1:
+                response_lines.append(f"✅ Added <code>{html.escape(added[0])}</code> to custom blocked keywords for this group.")
+            else:
+                added_str = ", ".join(f"<code>{html.escape(w)}</code>" for w in added)
+                response_lines.append(f"✅ Added {len(added)} custom blocked keywords:\n{added_str}")
+        if too_short:
+            response_lines.append(f"⚠️ Skipped (must be ≥2 characters): {', '.join(f'<code>{html.escape(w)}</code>' for w in too_short)}")
+        if failed:
+            response_lines.append(f"❌ Failed to add: {', '.join(f'<code>{html.escape(w)}</code>' for w in failed)}")
+
+        await message.reply_text("\n\n".join(response_lines) if response_lines else "No valid keywords provided.", parse_mode=ParseMode.HTML)
         return
 
-    # 6. /abuse removeword <word>
+    # 6. /abuse removeword <word1, word2, ...>
     elif subcmd == "removeword":
         if len(args) < 2:
-            await message.reply_text("Usage: <code>/abuse removeword &lt;word&gt;</code>", parse_mode=ParseMode.HTML)
+            await message.reply_text(
+                "Usage: <code>/abuse removeword &lt;word&gt;</code> or separated by commas: <code>/abuse removeword word1, word2</code>",
+                parse_mode=ParseMode.HTML
+            )
             return
-        word = " ".join(args[1:]).strip().lower()
-        success = remove_abuse_custom_keyword(chat.id, word)
-        if success:
-            log_moderation_event(chat.id, user.id if user else 0, "ABUSE_WORD_REMOVED", f"Removed keyword '{word}'")
-            await message.reply_text(f"🗑 Removed <code>{html.escape(word)}</code> from custom keywords.", parse_mode=ParseMode.HTML)
-        else:
-            await message.reply_text(f"Keyword <code>{html.escape(word)}</code> was not found in custom keywords.", parse_mode=ParseMode.HTML)
+        raw_text = " ".join(args[1:])
+        words = [w.strip().lower() for w in raw_text.split(",") if w.strip()]
+        if not words:
+            await message.reply_text("Usage: <code>/abuse removeword &lt;word1, word2, ...&gt;</code>", parse_mode=ParseMode.HTML)
+            return
+
+        unique_words = list(dict.fromkeys(words))
+        removed = []
+        not_found = []
+
+        for word in unique_words:
+            success = remove_abuse_custom_keyword(chat.id, word)
+            if success:
+                log_moderation_event(chat.id, user.id if user else 0, "ABUSE_WORD_REMOVED", f"Removed keyword '{word}'")
+                removed.append(word)
+            else:
+                not_found.append(word)
+
+        response_lines = []
+        if removed:
+            if len(removed) == 1:
+                response_lines.append(f"🗑 Removed <code>{html.escape(removed[0])}</code> from custom keywords.")
+            else:
+                removed_str = ", ".join(f"<code>{html.escape(w)}</code>" for w in removed)
+                response_lines.append(f"🗑 Removed {len(removed)} custom keywords:\n{removed_str}")
+        if not_found:
+            not_found_str = ", ".join(f"<code>{html.escape(w)}</code>" for w in not_found)
+            response_lines.append(f"⚠️ Not found in custom keywords: {not_found_str}")
+
+        await message.reply_text("\n\n".join(response_lines), parse_mode=ParseMode.HTML)
         return
 
     # 7. /abuse warnings [@user|user_id]

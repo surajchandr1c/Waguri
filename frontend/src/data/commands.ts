@@ -271,7 +271,7 @@ export const BOT_COMMANDS: BotCommandItem[] = [
     shortDesc: 'Abuse Detection & Auto-Moderation System',
     description: 'Advanced multi-layer abuse detection engine. Automatically identifies and removes vulgarity, slurs, sexual harassment, assault threats, and obfuscated bypass attempts with progressive warnings and mutes.',
     permission: 'Admin',
-    parameters: ['on', 'off', 'status', 'words', 'addword <word>', 'removeword <word>', 'warnings <id>', 'reset <id>', 'settings', 'logs'],
+    parameters: ['on', 'off', 'status', 'words', 'addword <words>', 'removeword <words>', 'warnings <id>', 'reset <id>', 'settings', 'logs'],
     example: '/abuse status',
     previewOutput: '🛡️ <b>Abuse Detection & Auto-Moderation</b>\n\n• Status: ✅ Active\n• Warnings Limit: 3\n• Mute Duration: 30 minutes\n• Bypass Shield: ✅ Enabled\n• Sexual Language: ✅ Enabled\n• General Abuse: ✅ Enabled\n• Hindi & Hinglish: ✅ Enabled',
     badge: 'Shield',
