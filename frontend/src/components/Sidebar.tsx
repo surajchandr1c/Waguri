@@ -159,25 +159,15 @@ export default function Sidebar() {
           </Link>
         </div>
 
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          <Link
-            href="/users"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-zinc-800 text-white border border-zinc-700 text-xs font-semibold hover:bg-zinc-700 transition-colors shrink-0"
-          >
-            <Users className="w-3.5 h-3.5 text-zinc-300" />
-            <span className="hidden min-[390px]:inline">User Panel</span>
-            <span className="min-[390px]:hidden">Users</span>
-          </Link>
-
+        <div className="flex items-center gap-2 shrink-0">
           <a
             href="https://t.me/Ms_Waguri_bot"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-white hover:bg-zinc-200 text-black text-xs font-bold shadow-sm transition-all shrink-0"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-zinc-200 text-black text-xs font-bold shadow-sm transition-all shrink-0"
           >
             <Send className="w-3 h-3 text-black" />
-            <span className="hidden min-[420px]:inline">Telegram</span>
-            <span className="min-[420px]:hidden">Bot</span>
+            <span>Launch Bot</span>
           </a>
         </div>
       </nav>
