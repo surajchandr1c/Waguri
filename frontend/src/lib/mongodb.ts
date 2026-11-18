@@ -20,25 +20,36 @@ export interface AdminDocument {
   lastLoginAt?: string;
 }
 
-const uri =
-  process.env.MONGODB_DIRECT_URI ||
-  process.env.MONGODB_URI ||
-  process.env.MONGO_URI ||
-  '';
-
-const dbName = process.env.MONGODB_DB_NAME || 'waguri_db';
-
-if (!uri) {
-  console.warn('[MongoDB] Warning: MONGODB_URI is not set in environment.');
-}
-
 declare global {
   var _mongoClientPromise: Promise<MongoClient> | undefined;
 }
 
-let clientPromise: Promise<MongoClient>;
+function getUri(): string {
+  return (
+    process.env.MONGODB_DIRECT_URI ||
+    process.env.MONGODB_URI ||
+    process.env.MONGO_URI ||
+    ''
+  );
+}
 
-if (process.env.NODE_ENV === 'development') {
+export function getMongoClientPromise(): Promise<MongoClient> {
+  const uri = getUri();
+  if (!uri) {
+    throw new Error('MONGODB_URI is not set in environment variables.');
+  }
+
+  if (process.env.NODE_ENV === 'development') {
+    if (!global._mongoClientPromise) {
+      const client = new MongoClient(uri, {
+        serverSelectionTimeoutMS: 10000,
+        connectTimeoutMS: 10000,
+      });
+      global._mongoClientPromise = client.connect();
+    }
+    return global._mongoClientPromise;
+  }
+
   if (!global._mongoClientPromise) {
     const client = new MongoClient(uri, {
       serverSelectionTimeoutMS: 10000,
@@ -46,17 +57,12 @@ if (process.env.NODE_ENV === 'development') {
     });
     global._mongoClientPromise = client.connect();
   }
-  clientPromise = global._mongoClientPromise;
-} else {
-  const client = new MongoClient(uri, {
-    serverSelectionTimeoutMS: 10000,
-    connectTimeoutMS: 10000,
-  });
-  clientPromise = client.connect();
+  return global._mongoClientPromise;
 }
 
 export async function getDb(): Promise<Db> {
-  const client = await clientPromise;
+  const dbName = process.env.MONGODB_DB_NAME || 'waguri_db';
+  const client = await getMongoClientPromise();
   return client.db(dbName);
 }
 
@@ -103,4 +109,4 @@ export async function getAdminCollection(): Promise<Collection<AdminDocument>> {
   return collection;
 }
 
-export default clientPromise;
+export default getMongoClientPromise;

@@ -21,7 +21,7 @@ export function calculateMidnightTiming() {
   };
 }
 
-export async function GET() {
+export async function GET(_request: Request) {
   const timing = calculateMidnightTiming();
 
   try {

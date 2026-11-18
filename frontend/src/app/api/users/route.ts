@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { fetchRawDatabaseData, runPythonScript } from '@/lib/pythonBridge';
 import { BotUser, BotGroupChat, BotChannel, BotFeatureUsage, UserActivity } from '@/types/user';
 
-export async function GET() {
+export async function GET(_request: Request) {
   const dbData = fetchRawDatabaseData<Record<string, unknown>>();
 
   const businessConnections: Record<string, any>[] = (dbData?.business_connections as any[]) || [];

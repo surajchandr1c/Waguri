@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { runPythonScript } from '@/lib/pythonBridge';
 
-export async function GET() {
+export async function GET(_request: Request) {
   try {
     const data = runPythonScript('promotions_manager.py', ['--list']);
     return NextResponse.json(data || { promotions: [], logs: [], chats: [], total_gcs: 0 });

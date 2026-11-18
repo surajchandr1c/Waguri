@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { runPythonScript } from '@/lib/pythonBridge';
 
-export async function GET() {
+export async function GET(_request: Request) {
   try {
     const data = runPythonScript('get_users_data.py', ['--settings-get']);
     return NextResponse.json(data || {});
