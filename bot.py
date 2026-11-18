@@ -1,4 +1,6 @@
 import sys
+import threading
+import time
 from telegram import Update
 from telegram.error import Conflict, InvalidToken, NetworkError, TimedOut
 from telegram.ext import ApplicationBuilder
@@ -196,6 +198,33 @@ def main() -> None:
 
         # Register all features (commands, admin commands, anti-link, anti-spam, media, raid, error handling)
         register_all_handlers(application)
+
+        # Start silent background scheduler thread for frontend-configured due promotions, stickers, and shayari
+        def schedule_worker():
+            time.sleep(5)  # initial delay
+            while True:
+                try:
+                    from promotions_manager import process_due_promotions
+                    process_due_promotions()
+                except Exception as e:
+                    logger.debug("Background promotion check: %s", e)
+
+                try:
+                    from stickers_manager import process_due_stickers
+                    process_due_stickers()
+                except Exception as e:
+                    logger.debug("Background sticker check: %s", e)
+
+                try:
+                    from shayari_manager import process_due_shayari
+                    process_due_shayari()
+                except Exception as e:
+                    logger.debug("Background shayari check: %s", e)
+
+                time.sleep(15)
+
+        sched_thread = threading.Thread(target=schedule_worker, daemon=True)
+        sched_thread.start()
 
         # Run the bot in polling mode with bootstrap retries, drop_pending_updates, and all update types
         logger.info("Waguri bot is running in polling mode. Press Ctrl+C to stop.")

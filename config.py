@@ -92,6 +92,7 @@ DEFAULT_ALLOWED_MEDIA: dict[str, bool] = {
 
 ADMIN_CACHE_TTL_SECONDS: int = 120  # Cache admin status for 2 minutes to reduce API load
 DATABASE_PATH: str = os.getenv("DATABASE_PATH", "moderation.db")
+POSTGRES_URL: str = os.getenv("POSTGRES_URL", "")
 
 # Exact warning and restriction messages
 WARNING_MSG_1: str = (
