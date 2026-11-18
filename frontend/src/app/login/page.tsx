@@ -83,7 +83,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="relative min-h-screen w-full flex items-center justify-center p-4 sm:p-6 overflow-hidden select-none">
+    <div className="relative min-h-screen w-full flex items-center justify-center lg:justify-end p-4 sm:p-8 lg:pr-20 xl:pr-32 overflow-hidden select-none">
       {/* 1. Cinematic Background Image (waguri.png with cover positioning & entrance animation) */}
       <div
         className="fixed inset-0 w-full h-full bg-cover bg-center bg-no-repeat login-bg-animation pointer-events-none"
@@ -95,6 +95,7 @@ export default function LoginPage() {
       {/* 2. Dark Purple & Black Vignette Overlay for optimal contrast and aesthetics */}
       <div className="fixed inset-0 bg-gradient-to-b from-black/65 via-purple-950/45 to-black/85 backdrop-blur-[1px] pointer-events-none" />
       <div className="fixed inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-transparent via-black/40 to-black/80 pointer-events-none" />
+      <div className="fixed inset-0 bg-gradient-to-r from-transparent via-black/20 to-black/65 pointer-events-none hidden lg:block" />
 
       {/* 3. Glassmorphism Login Card with Upward Entrance Animation */}
       <div className="relative w-full max-w-md z-10 login-card-animation">
