@@ -275,6 +275,7 @@ def init_db(db_path: str | None = None) -> None:
                 parse_mode TEXT NOT NULL DEFAULT 'HTML',
                 excluded_user_ids TEXT NOT NULL DEFAULT '[]',
                 welcome_message_enabled INTEGER NOT NULL DEFAULT 1,
+                initial_message_set INTEGER NOT NULL DEFAULT 0,
                 updated_at REAL NOT NULL
             )
             """
@@ -346,13 +347,23 @@ def init_db(db_path: str | None = None) -> None:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_biz_contacts_user_sender ON business_first_contacts(business_user_id, sender_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_biz_logs_user_sent ON business_reply_logs(business_user_id, sent_at)")
 
-        # Migration: ensure anti_bio_link_enabled and clean_service_enabled columns exist in chat_settings
+        # Migration: ensure anti_bio_link_enabled, clean_service_enabled, custom_greeting_msg, greeting_enabled columns exist in chat_settings
         cursor.execute("PRAGMA table_info(chat_settings)")
         existing_cols = [r[1] for r in cursor.fetchall()]
         if "anti_bio_link_enabled" not in existing_cols:
             cursor.execute("ALTER TABLE chat_settings ADD COLUMN anti_bio_link_enabled INTEGER NOT NULL DEFAULT 1")
         if "clean_service_enabled" not in existing_cols:
             cursor.execute("ALTER TABLE chat_settings ADD COLUMN clean_service_enabled INTEGER NOT NULL DEFAULT 1")
+        if "custom_greeting_msg" not in existing_cols:
+            cursor.execute("ALTER TABLE chat_settings ADD COLUMN custom_greeting_msg TEXT DEFAULT NULL")
+        if "greeting_enabled" not in existing_cols:
+            cursor.execute("ALTER TABLE chat_settings ADD COLUMN greeting_enabled INTEGER NOT NULL DEFAULT 1")
+
+        # Migration: ensure initial_message_set exists in personal_reply_settings
+        cursor.execute("PRAGMA table_info(personal_reply_settings)")
+        p_cols = [r[1] for r in cursor.fetchall()]
+        if "initial_message_set" not in p_cols:
+            cursor.execute("ALTER TABLE personal_reply_settings ADD COLUMN initial_message_set INTEGER NOT NULL DEFAULT 0")
 
         # ---------------------------------------------------------------------
         # Safe Data Migrations from legacy tables (if present)
@@ -658,6 +669,8 @@ def get_group_settings(chat_id: int, db_path: str | None = None) -> dict[str, An
                 "warning_delete_after_seconds": int(d.get("warning_delete_after_seconds") or 10),
                 "custom_warning_msg_1": d.get("custom_warning_msg_1"),
                 "custom_warning_msg_2": d.get("custom_warning_msg_2"),
+                "custom_greeting_msg": d.get("custom_greeting_msg"),
+                "greeting_enabled": bool(d.get("greeting_enabled", 1)),
                 "raid_mode_enabled": bool(d.get("raid_mode_enabled", 0)),
                 "is_active": bool(d.get("is_active", 1)),
                 "updated_at": d.get("updated_at") or 0.0,
@@ -683,6 +696,7 @@ def update_group_feature(chat_id: int, feature_col: str, enabled: bool, db_path:
         "anti_bot_enabled",
         "media_restrictions_enabled",
         "raid_mode_enabled",
+        "greeting_enabled",
     }
     if feature_col not in valid_cols:
         raise ValueError(f"Invalid feature column: {feature_col}")
@@ -738,6 +752,7 @@ def update_group_text_setting(chat_id: int, setting_col: str, value: str | None,
     valid_cols = {
         "custom_warning_msg_1",
         "custom_warning_msg_2",
+        "custom_greeting_msg",
         "allowed_media_types",
     }
     if setting_col not in valid_cols:
@@ -1471,8 +1486,8 @@ def get_personal_reply_settings(user_id: int, db_path: str | None = None) -> dic
             """
             INSERT INTO personal_reply_settings (
                 user_id, is_enabled, first_time_only, cooldown_seconds, daily_limit,
-                reply_delay_seconds, parse_mode, excluded_user_ids, welcome_message_enabled, updated_at
-            ) VALUES (?, 1, 1, 86400, 100, 0, 'HTML', '[]', 1, ?)
+                reply_delay_seconds, parse_mode, excluded_user_ids, welcome_message_enabled, initial_message_set, updated_at
+            ) VALUES (?, 1, 1, 86400, 100, 0, 'HTML', '[]', 1, 0, ?)
             """,
             (user_id, now),
         )
@@ -1493,6 +1508,7 @@ def update_personal_reply_settings(user_id: int, db_path: str | None = None, **k
         "parse_mode",
         "excluded_user_ids",
         "welcome_message_enabled",
+        "initial_message_set",
     }
     updates = {k: v for k, v in kwargs.items() if k in allowed_keys}
     if not updates:
@@ -1565,6 +1581,45 @@ def reset_personal_reply_template(
     """Reset a user's reply template back to the default message."""
     set_personal_reply_template(user_id, DEFAULT_PERSONAL_REPLY_TEMPLATE, template_name, db_path)
     return DEFAULT_PERSONAL_REPLY_TEMPLATE
+
+
+def has_user_set_initial_message(user_id: int, db_path: str | None = None) -> bool:
+    """Check if the user has already configured their initial personal reply message."""
+    settings = get_personal_reply_settings(user_id, db_path=db_path)
+    return bool(settings.get("initial_message_set", 0))
+
+
+def set_user_initial_message_flag(user_id: int, is_set: bool = True, db_path: str | None = None) -> None:
+    """Update the initial_message_set flag for a user."""
+    update_personal_reply_settings(user_id, initial_message_set=(1 if is_set else 0), db_path=db_path)
+
+
+def get_group_greeting_message(chat_id: int, db_path: str | None = None) -> str | None:
+    """Retrieve the custom GC greeting message for a group, or None if default."""
+    path = db_path or get_db_path()
+    with get_connection(path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT custom_greeting_msg FROM chat_settings WHERE chat_id = ?", (chat_id,))
+        row = cursor.fetchone()
+        if row and row["custom_greeting_msg"]:
+            return row["custom_greeting_msg"]
+        return None
+
+
+def set_group_greeting_message(chat_id: int, message: str | None, db_path: str | None = None) -> None:
+    """Save or clear the custom GC greeting message for a group."""
+    update_group_text_setting(chat_id, "custom_greeting_msg", message.strip() if message else None, db_path=db_path)
+
+
+def get_group_greeting_enabled(chat_id: int, db_path: str | None = None) -> bool:
+    """Check if greetings are enabled for a group."""
+    settings = get_group_settings(chat_id, db_path=db_path)
+    return bool(settings.get("greeting_enabled", True))
+
+
+def set_group_greeting_enabled(chat_id: int, enabled: bool, db_path: str | None = None) -> None:
+    """Toggle greeting replies for a group."""
+    update_group_feature(chat_id, "greeting_enabled", enabled, db_path=db_path)
 
 
 def check_and_claim_first_contact(

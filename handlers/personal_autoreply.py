@@ -38,19 +38,23 @@ from database import (
     get_daily_replies_count,
     get_excluded_users_list,
     get_global_business_stats,
+    get_group_greeting_message,
     get_personal_reply_settings,
     get_personal_reply_template,
     get_user_business_connections,
     get_user_business_stats,
+    has_user_set_initial_message,
     is_user_excluded,
     log_business_reply,
     remove_excluded_user,
     reset_personal_reply_template,
     save_or_update_business_connection,
+    set_group_greeting_message,
     set_personal_reply_template,
+    set_user_initial_message_flag,
     update_personal_reply_settings,
 )
-from handlers.admin_check import is_bot_owner
+from handlers.admin_check import is_bot_owner, is_sender_admin_or_owner
 
 logger = logging.getLogger("Waguri.PersonalAutoReply")
 
@@ -125,6 +129,17 @@ def build_personal_settings_markup(user_id: int) -> tuple[str, InlineKeyboardMar
     delay = settings.get("reply_delay_seconds", 0)
     excluded = get_excluded_users_list(user_id)
 
+    is_owner = is_bot_owner(user_id)
+    is_initial_done = has_user_set_initial_message(user_id)
+    is_locked = is_initial_done and not is_owner
+
+    if is_locked:
+        edit_status_str = "🔒 Locked (Only Admin can edit)"
+    elif is_owner:
+        edit_status_str = "👑 Admin Access (Full Editing)"
+    else:
+        edit_status_str = "🟢 Ready for First Reply Setup"
+
     if conn:
         status_str = "🟢 Active" if conn.get("is_enabled") else "🔴 Disconnected"
         can_reply_str = "✅ Yes" if conn.get("can_reply") else "⚠️ No (Permission missing)"
@@ -152,7 +167,8 @@ def build_personal_settings_markup(user_id: int) -> tuple[str, InlineKeyboardMar
         f"• Mode: <b>{'1️⃣ First-time Senders Only' if first_time_only else f'⏱️ Cooldown ({format_cooldown_label(cooldown)})'}</b>\n"
         f"• Daily Limit: <b>{daily_limit} replies</b> (Sent today: {stats.get('replies_today', 0)})\n"
         f"• Reply Delay: <b>{delay}s</b>\n"
-        f"• Excluded Senders: <b>{len(excluded)}</b>\n\n"
+        f"• Excluded Senders: <b>{len(excluded)}</b>\n"
+        f"• Message Status: <b>{edit_status_str}</b>\n\n"
         "📝 <b>Saved Reply Message:</b>\n"
         f"<blockquote>{html.escape(preview_snippet)}</blockquote>\n\n"
         "<i>Use the controls below to configure your personal auto-reply:</i>"
@@ -164,12 +180,18 @@ def build_personal_settings_markup(user_id: int) -> tuple[str, InlineKeyboardMar
     mode_btn_text = "Mode: 1️⃣ First-Time Only" if first_time_only else "Mode: ⏱️ Cooldown"
     next_mode_val = 0 if first_time_only else 1
 
+    edit_btn_text = "🔒 Message Locked (Admin Only)" if is_locked else "✍️ Edit Message"
+    edit_btn_data = "biz:locked_msg" if is_locked else "biz:edit_msg"
+
+    reset_btn_text = "🔒 Reset (Admin Only)" if is_locked else "🔄 Reset Message"
+    reset_btn_data = "biz:locked_msg" if is_locked else "biz:menu:reset_msg"
+
     keyboard = [
         [
             InlineKeyboardButton(toggle_btn_text, callback_data=toggle_btn_data),
         ],
         [
-            InlineKeyboardButton("✍️ Edit Message", callback_data="biz:edit_msg"),
+            InlineKeyboardButton(edit_btn_text, callback_data=edit_btn_data),
             InlineKeyboardButton("👁️ Preview", callback_data="biz:preview"),
         ],
         [
@@ -182,7 +204,7 @@ def build_personal_settings_markup(user_id: int) -> tuple[str, InlineKeyboardMar
         ],
         [
             InlineKeyboardButton("🚫 Excluded List", callback_data="biz:menu:excluded"),
-            InlineKeyboardButton("🔄 Reset Message", callback_data="biz:menu:reset_msg"),
+            InlineKeyboardButton(reset_btn_text, callback_data=reset_btn_data),
         ],
         [
             InlineKeyboardButton("📈 My Statistics", callback_data="biz:stats"),
@@ -645,10 +667,16 @@ async def autoreply_off_command(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def setmessage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the /setmessage command to write and save a custom auto-reply."""
+    """
+    Handle the /setmessage command.
+    - In group chats: Strictly restricted to group admins to configure GC messaging.
+    - In private chats: Allows user to set their personal first-reply message once.
+      After that, only administrators can edit or change it.
+    """
     user = update.effective_user
     message = update.effective_message
-    if not user or not message:
+    chat = update.effective_chat
+    if not user or not message or not chat:
         return
 
     # Check if text was passed as command arguments
@@ -660,6 +688,62 @@ async def setmessage_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if len(parts) > 1:
             raw_args = parts[1].strip()
 
+    # 1. Group Chat branch: Only admin can configure GC messaging
+    if chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        sender_chat = getattr(message, "sender_chat", None)
+        is_admin = await is_sender_admin_or_owner(chat, user, sender_chat, context.bot)
+        if not is_admin:
+            await message.reply_text(
+                "❌ <b>Access Denied</b>: Only group administrators can edit GC messaging. Regular members do not have access to configure group messages.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        if raw_args:
+            set_group_greeting_message(chat.id, raw_args)
+            await message.reply_text(
+                "✅ <b>GC Reply Message Updated!</b>\n\n"
+                f"<b>New Group Reply Message:</b>\n<blockquote>{html.escape(raw_args)}</blockquote>\n\n"
+                "<b>Supported Placeholders:</b>\n"
+                "• <code>{user}</code> or <code>{first_name}</code> - Sender's name\n"
+                "• <code>{username}</code> - @username\n"
+                "• <code>{chat}</code> - Group name\n\n"
+                "<i>Waguri will now use this reply for greetings in this group.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        current_gc = get_group_greeting_message(chat.id)
+        current_disp = f"<blockquote>{html.escape(current_gc)}</blockquote>" if current_gc else "<i>Default (Hii {user})</i>"
+        await message.reply_text(
+            "✍️ <b>Set Group Chat (GC) Reply Message</b>\n\n"
+            f"<b>Current GC Message:</b>\n{current_disp}\n\n"
+            "<b>Usage:</b> <code>/setmessage &lt;your group message&gt;</code>\n"
+            "Or: <code>/setgcmsg &lt;your group message&gt;</code>\n\n"
+            "<b>Supported Placeholders:</b>\n"
+            "• <code>{user}</code> or <code>{first_name}</code> - Sender's name\n"
+            "• <code>{username}</code> - @username\n"
+            "• <code>{chat}</code> - Group name\n\n"
+            "<i>Only group administrators can modify this setting.</i>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # 2. Private Chat branch: Personal Auto-Reply
+    is_owner = is_bot_owner(user.id)
+    is_initial_done = has_user_set_initial_message(user.id)
+
+    # If the user has already set their personal message and is not admin, lock them out!
+    if not is_owner and is_initial_done:
+        await message.reply_text(
+            "🔒 <b>Personal Message Editing Locked</b>\n\n"
+            "You have already configured your personal first-reply message.\n"
+            "After the initial setup, only an <b>Administrator</b> can edit or change your personal reply message.\n\n"
+            "Please contact an administrator if you need to update it.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     if raw_args:
         # Validate formatting by test rendering
         dummy_sender = User(id=1, first_name="Alex", is_bot=False, last_name="Taylor", username="alextaylor")
@@ -667,6 +751,10 @@ async def setmessage_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         # Save to database
         set_personal_reply_template(user.id, raw_args)
+
+        # If user is not admin, mark initial setup as completed
+        if not is_owner:
+            set_user_initial_message_flag(user.id, True)
 
         # Clear any pending prompt state
         context.user_data.pop("awaiting_personal_reply_msg", None)
@@ -679,10 +767,19 @@ async def setmessage_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 ]
             ]
         )
+
+        lock_notice = ""
+        if not is_owner:
+            lock_notice = (
+                "\n\n<i>Note: Your personal first-reply message is now configured. "
+                "Any subsequent edits or changes can only be performed by an Administrator.</i>"
+            )
+
         await message.reply_text(
             "✅ <b>Personal Auto-Reply Message Saved!</b>\n\n"
             "<b>Your new message:</b>\n"
-            f"<blockquote>{html.escape(raw_args)}</blockquote>\n\n"
+            f"<blockquote>{html.escape(raw_args)}</blockquote>"
+            f"{lock_notice}\n\n"
             "Use /preview to view how incoming contacts will see it.",
             reply_markup=preview_markup,
             parse_mode=ParseMode.HTML,
@@ -692,7 +789,7 @@ async def setmessage_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Prompt user for input
     context.user_data["awaiting_personal_reply_msg"] = True
     await message.reply_text(
-        "✍️ <b>Set Your Personal Auto-Reply Message</b>\n\n"
+        "✍️ <b>Set Your Personal First-Reply Message</b>\n\n"
         "Please send your message now, or run:\n"
         "<code>/setmessage &lt;your message text&gt;</code>\n\n"
         "<b>Available Dynamic Variables:</b>\n"
@@ -702,7 +799,8 @@ async def setmessage_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "• <code>{username}</code> - Sender's @username\n"
         "• <code>{time}</code> - Time sent (HH:MM UTC)\n"
         "• <code>{date}</code> - Date sent (YYYY-MM-DD)\n\n"
-        "<i>HTML tags (<b>bold</b>, <i>italic</i>, <code>code</code>, <a href='...'>links</a>) are supported.</i>",
+        "<i>HTML tags (<b>bold</b>, <i>italic</i>, <code>code</code>, <a href='...'>links</a>) are supported.</i>\n\n"
+        "<i>Note: You can configure this message once for your first reply. After that, only an Administrator can edit it.</i>",
         parse_mode=ParseMode.HTML,
     )
 
@@ -816,10 +914,42 @@ async def mystatus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def resetmessage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the /resetmessage command to restore the default auto-reply template."""
+    """
+    Handle the /resetmessage command.
+    - In group chats: Group admin only. Resets GC greeting message.
+    - In private chats: Admin only if user has already configured their initial personal reply.
+    """
     user = update.effective_user
     message = update.effective_message
-    if not user or not message:
+    chat = update.effective_chat
+    if not user or not message or not chat:
+        return
+
+    # In Group Chat
+    if chat.type in (ChatType.GROUP, ChatType.SUPERGROUP):
+        sender_chat = getattr(message, "sender_chat", None)
+        is_admin = await is_sender_admin_or_owner(chat, user, sender_chat, context.bot)
+        if not is_admin:
+            await message.reply_text(
+                "❌ <b>Access Denied</b>: Only group administrators can edit GC messaging.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        set_group_greeting_message(chat.id, None)
+        await message.reply_text(
+            "🔄 <b>GC Reply Message Reset</b>\n\n"
+            "Group greeting message has been reset to default (<code>Hii {user}</code>).",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # In Private Chat
+    is_owner = is_bot_owner(user.id)
+    if not is_owner and has_user_set_initial_message(user.id):
+        await message.reply_text(
+            "🔒 <b>Action Denied</b>: Your personal message has already been configured. Only an Administrator can reset or edit it.",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     reset_personal_reply_template(user.id)
@@ -936,8 +1066,20 @@ async def handle_private_reply_message_input(update: Update, context: ContextTyp
     # Clear state
     context.user_data["awaiting_personal_reply_msg"] = False
 
+    is_owner = is_bot_owner(user.id)
+    if not is_owner and has_user_set_initial_message(user.id):
+        await message.reply_text(
+            "🔒 <b>Personal Message Editing Locked</b>\n\n"
+            "You have already configured your personal first-reply message.\n"
+            "Only an <b>Administrator</b> can edit or change your personal reply message now.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
     # Save new template
     set_personal_reply_template(user.id, text)
+    if not is_owner:
+        set_user_initial_message_flag(user.id, True)
 
     markup = InlineKeyboardMarkup(
         [
@@ -948,10 +1090,18 @@ async def handle_private_reply_message_input(update: Update, context: ContextTyp
         ]
     )
 
+    lock_note = ""
+    if not is_owner:
+        lock_note = (
+            "\n\n<i>Note: Your personal first-reply message is now configured. "
+            "Subsequent modifications can only be performed by an Administrator.</i>"
+        )
+
     await message.reply_text(
-        "✅ <b>Custom Auto-Reply Saved!</b>\n\n"
+        "✅ <b>Personal First-Reply Message Saved!</b>\n\n"
         "<b>Saved Message:</b>\n"
-        f"<blockquote>{html.escape(text)}</blockquote>\n\n"
+        f"<blockquote>{html.escape(text)}</blockquote>"
+        f"{lock_note}\n\n"
         "Use /preview to view how incoming senders will see it.",
         reply_markup=markup,
         parse_mode=ParseMode.HTML,
@@ -980,6 +1130,14 @@ async def personal_callback_handler(update: Update, context: ContextTypes.DEFAUL
         await query.answer()
         return
 
+    # 1b. Locked Message Notification (When non-admin tries to edit after initial setup)
+    elif action == "locked_msg":
+        await query.answer(
+            "🔒 Locked: Your personal message has already been configured. Only an Administrator can edit or change it.",
+            show_alert=True,
+        )
+        return
+
     # 2. Toggle Auto-Reply (Enable/Disable)
     elif action == "set_enabled":
         val = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
@@ -1004,10 +1162,18 @@ async def personal_callback_handler(update: Update, context: ContextTypes.DEFAUL
         dummy_sender = User(id=999888, first_name="Alex", is_bot=False, last_name="Taylor", username="alextaylor")
         rendered = render_personal_template(template, dummy_sender)
 
+        is_owner = is_bot_owner(user.id)
+        is_locked = has_user_set_initial_message(user.id) and not is_owner
+        edit_btn = (
+            InlineKeyboardButton("🔒 Message Locked", callback_data="biz:locked_msg")
+            if is_locked
+            else InlineKeyboardButton("✍️ Edit Message", callback_data="biz:edit_msg")
+        )
+
         markup = InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("✍️ Edit Message", callback_data="biz:edit_msg"),
+                    edit_btn,
                     InlineKeyboardButton("🔙 Back", callback_data="biz:main"),
                 ]
             ]
@@ -1036,6 +1202,14 @@ async def personal_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
     # 5. Prompt Edit Message
     elif action == "edit_msg":
+        is_owner = is_bot_owner(user.id)
+        if not is_owner and has_user_set_initial_message(user.id):
+            await query.answer(
+                "🔒 Locked: Only an Administrator can edit your personal reply message.",
+                show_alert=True,
+            )
+            return
+
         context.user_data["awaiting_personal_reply_msg"] = True
         cancel_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="biz:main")]])
         await query.edit_message_text(
@@ -1176,6 +1350,14 @@ async def personal_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
     # 13. Reset Message Confirmation
     elif action == "menu" and len(parts) > 2 and parts[2] == "reset_msg":
+        is_owner = is_bot_owner(user.id)
+        if not is_owner and has_user_set_initial_message(user.id):
+            await query.answer(
+                "🔒 Locked: Only an Administrator can reset your personal reply message.",
+                show_alert=True,
+            )
+            return
+
         markup = InlineKeyboardMarkup(
             [
                 [
@@ -1196,6 +1378,14 @@ async def personal_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
     # 14. Confirm Reset
     elif action == "confirm_reset":
+        is_owner = is_bot_owner(user.id)
+        if not is_owner and has_user_set_initial_message(user.id):
+            await query.answer(
+                "🔒 Locked: Only an Administrator can reset your personal reply message.",
+                show_alert=True,
+            )
+            return
+
         reset_personal_reply_template(user.id)
         text, markup = build_personal_settings_markup(user.id)
         await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
@@ -1247,6 +1437,129 @@ async def personal_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
 
 # =============================================================================
+# Bot Owner / Admin Personal Messaging Controls
+# =============================================================================
+
+async def admin_setmessage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Super-Admin / Bot Owner Command:
+    /admin_setmessage <user_id> <new message text> (also /setusermsg)
+    Allows the admin to edit or override any user's personal auto-reply message.
+    """
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message or not is_bot_owner(user.id):
+        return
+
+    args = context.args or []
+    if len(args) < 2:
+        await message.reply_text(
+            "<b>Usage:</b> <code>/admin_setmessage &lt;user_id&gt; &lt;new message text&gt;</code>\n\n"
+            "Allows the bot administrator to edit or set the personal auto-reply message for any user.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        target_user_id = int(args[0])
+    except ValueError:
+        await message.reply_text("❌ Invalid user ID. Must be an integer.")
+        return
+
+    new_text = " ".join(args[1:]).strip()
+    set_personal_reply_template(target_user_id, new_text)
+    # Lock for the user so only admin can edit going forward
+    set_user_initial_message_flag(target_user_id, True)
+
+    await message.reply_text(
+        f"✅ <b>Personal Reply Updated for User <code>{target_user_id}</code>!</b>\n\n"
+        f"<b>New Saved Message:</b>\n<blockquote>{html.escape(new_text)}</blockquote>\n\n"
+        "<i>User's editing permissions are locked to administrators.</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def admin_resetmessage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Super-Admin / Bot Owner Command:
+    /admin_resetmessage <user_id> [unlock]
+    Resets a user's personal message to default, and optionally unlocks it.
+    """
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message or not is_bot_owner(user.id):
+        return
+
+    args = context.args or []
+    if not args:
+        await message.reply_text(
+            "<b>Usage:</b> <code>/admin_resetmessage &lt;user_id&gt; [unlock]</code>\n\n"
+            "Resets the specified user's personal reply message to default.\n"
+            "Pass <code>unlock</code> as second argument to allow user to configure initial setup again.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        target_user_id = int(args[0])
+    except ValueError:
+        await message.reply_text("❌ Invalid user ID. Must be an integer.")
+        return
+
+    reset_personal_reply_template(target_user_id)
+    should_unlock = len(args) > 1 and args[1].lower() == "unlock"
+    if should_unlock:
+        set_user_initial_message_flag(target_user_id, False)
+
+    status_str = "Unlocked (User can configure initial message)" if should_unlock else "Locked"
+    await message.reply_text(
+        f"🔄 <b>User <code>{target_user_id}</code> Personal Message Reset!</b>\n\n"
+        f"• Message: Default template restored\n"
+        f"• Edit Permission: <b>{status_str}</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def admin_sendmessage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Super-Admin / Bot Owner Command:
+    /admin_sendmessage <chat_id_or_user_id> <message text>
+    Allows admin to send a message directly to any chat or user via Waguri.
+    """
+    user = update.effective_user
+    message = update.effective_message
+    if not user or not message or not is_bot_owner(user.id):
+        return
+
+    args = context.args or []
+    if len(args) < 2:
+        await message.reply_text(
+            "<b>Usage:</b> <code>/admin_sendmessage &lt;chat_id_or_user_id&gt; &lt;message text&gt;</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    try:
+        target_id = int(args[0])
+    except ValueError:
+        await message.reply_text("❌ Invalid chat/user ID. Must be an integer.")
+        return
+
+    text_to_send = " ".join(args[1:]).strip()
+    try:
+        await context.bot.send_message(chat_id=target_id, text=text_to_send, parse_mode=ParseMode.HTML)
+        await message.reply_text(
+            f"✅ Message successfully sent to <code>{target_id}</code>!",
+            parse_mode=ParseMode.HTML,
+        )
+    except Exception as exc:
+        await message.reply_text(
+            f"❌ Failed to send message to <code>{target_id}</code>: {html.escape(str(exc))}",
+            parse_mode=ParseMode.HTML,
+        )
+
+
+# =============================================================================
 # Handler Registration
 # =============================================================================
 
@@ -1276,10 +1589,15 @@ def register_personal_autoreply_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("include_user", include_user_command), group=0)
     application.add_handler(CommandHandler("business_stats", business_stats_command), group=0)
 
-    # 5. Interactive Callback Handler for Personal Dashboard (biz:*)
+    # 5. Super-Admin / Bot Owner Personal Messaging Commands
+    application.add_handler(CommandHandler(["admin_setmessage", "setusermsg"], admin_setmessage_command), group=0)
+    application.add_handler(CommandHandler("admin_resetmessage", admin_resetmessage_command), group=0)
+    application.add_handler(CommandHandler(["admin_sendmessage", "sendpersonal"], admin_sendmessage_command), group=0)
+
+    # 6. Interactive Callback Handler for Personal Dashboard (biz:*)
     application.add_handler(CallbackQueryHandler(personal_callback_handler, pattern=r"^biz:"), group=0)
 
-    # 6. Private text message listener for interactive reply message typing
+    # 7. Private text message listener for interactive reply message typing
     application.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & filters.TEXT & (~filters.COMMAND),

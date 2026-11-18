@@ -128,9 +128,11 @@ flowchart TD
 
 ## 7. Security, Moderation & Moderation Algorithms
 
-| Protection Feature | Mechanism & Algorithm |
+| **Security, Moderation & Moderation Algorithms** | Mechanism & Algorithm |
 | :--- | :--- |
+| **Personal vs. GC Messaging Separation** | Complete isolation between Personal (DM/Secretary) auto-replies and Group Chat (GC) messaging. Regular users can set their personal message once for initial first-replies; subsequent edits are strictly restricted to Administrators. GC messaging can **only** be edited by Group Administrators (`is_sender_admin_or_owner`) or Bot Owners; regular members receive zero access. |
 | **Role-Based Access Control (RBAC)** | Dynamic privilege validation querying Telegram chat member status (`is_sender_admin_or_owner`, `is_bot_owner`, `is_group_owner`). |
+| **Command Scope Segregation** | Scoped bot menus via `BotCommandScopeAllPrivateChats` (personal settings), `BotCommandScopeAllGroupChats` (member-safe commands), and `BotCommandScopeAllChatAdministrators` (moderation & GC messaging controls). |
 | **Anti-Spam & Flood Control** | Token-bucket sliding window frequency counter; message fingerprinting via normalized SHA-256 / hash comparisons to detect copy-paste floods. |
 | **Anti-Link Filtering** | Regex pattern matching for standard URLs, Telegram invite links (`t.me/+`, `telegram.me`), and usernames against per-group domain whitelists and blacklists. |
 | **Service Message Cleaner** | Automatic detection and deletion of system service messages (`new_chat_members`, `left_chat_member`, `pinned_message`). |
