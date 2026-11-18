@@ -89,6 +89,7 @@ async def features_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     settings = get_group_settings(chat.id)
     chat_title = html.escape(chat.title or "Unnamed Chat")
 
+    abuse_status = "✅ Enabled" if settings.get("abuse_detection_enabled", True) else "❌ Disabled"
     anti_link_status = "✅ Enabled" if settings["anti_link_enabled"] else "❌ Disabled"
     anti_bio_link_status = "✅ Enabled" if settings.get("anti_bio_link_enabled", True) else "❌ Disabled"
     clean_service_status = "✅ Enabled" if settings.get("clean_service_enabled", True) else "❌ Disabled"
@@ -102,8 +103,12 @@ async def features_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     media_status = "✅ Enabled" if settings.get("media_restrictions_enabled", False) else "❌ Disabled"
     raid_status = "🚨 ACTIVE" if settings.get("raid_mode_enabled", False) else "⚪ Inactive"
 
+    abuse_warn_limit = settings.get("abuse_warning_limit", 3)
+    abuse_mute_mins = settings.get("abuse_mute_duration_minutes", 30)
+
     text = (
         f"⚙️ <b>Moderation Features for {chat_title}</b>\n\n"
+        f"• <b>Abuse Shield:</b> {abuse_status}\n"
         f"• <b>Anti-Link Protection:</b> {anti_link_status}\n"
         f"• <b>Anti-Bio-Link Protection:</b> {anti_bio_link_status}\n"
         f"• <b>Clean Service Messages:</b> {clean_service_status}\n"
@@ -116,6 +121,7 @@ async def features_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f"• <b>Anti-Bot:</b> {bot_status}\n"
         f"• <b>Media Filter:</b> {media_status}\n"
         f"• <b>Raid Lockdown Mode:</b> {raid_status}\n\n"
+        f"🚨 <b>Abuse Warnings Limit:</b> {abuse_warn_limit} (Mute: {abuse_mute_mins}m)\n"
         f"⏱ <b>Spam Window:</b> {settings['spam_window_seconds']}s\n"
         f"⚠️ <b>Warning Limit:</b> {settings['warning_limit']}\n"
         f"⏳ <b>Restriction Duration:</b> {settings['restriction_duration_seconds'] // 3600}h\n\n"
@@ -142,6 +148,7 @@ async def _toggle_feature(update: Update, context: ContextTypes.DEFAULT_TYPE, en
                 "⚠️ <b>Please specify a feature to enable.</b>\n\n"
                 "<b>Usage:</b> <code>/enable &lt;feature&gt;</code>\n"
                 "<b>Available features:</b>\n"
+                "• <code>abuse</code> - Abuse Detection & Auto-Moderation\n"
                 "• <code>antilink</code> - Anti-link protection\n"
                 "• <code>antispam</code> - Anti-spam protection\n"
                 "• <code>flood</code> - Flood rate detection\n"
@@ -158,7 +165,7 @@ async def _toggle_feature(update: Update, context: ContextTypes.DEFAULT_TYPE, en
                 "⚠️ <b>Please specify a feature to disable.</b>\n\n"
                 "<b>Usage:</b> <code>/disable &lt;feature&gt;</code>\n"
                 "<b>Available features:</b>\n"
-                "• <code>antilink</code>, <code>antispam</code>, <code>flood</code>, "
+                "• <code>abuse</code>, <code>antilink</code>, <code>antispam</code>, <code>flood</code>, "
                 "<code>warnings</code>, <code>autorestrict</code>, <code>antiforward</code>, "
                 "<code>antijoin</code>, <code>antibot</code>, <code>media</code>, <code>raid</code>."
             )
@@ -213,6 +220,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"🆔 <b>Chat ID:</b> <code>{chat.id}</code>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🔍 <b>Messages Checked:</b> {stats['total_messages_checked']}\n"
+        f"🚨 <b>Abuse Messages Deleted:</b> {stats.get('abuse_deleted', 0)}\n"
         f"🔗 <b>Links Deleted:</b> {stats['links_deleted']}\n"
         f"🚫 <b>Spam Messages Deleted:</b> {stats['spam_deleted']}\n"
         f"⚠️ <b>Warnings Issued:</b> {stats['warnings_issued']}\n"

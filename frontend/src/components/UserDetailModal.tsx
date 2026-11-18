@@ -100,6 +100,7 @@ export default function UserDetailModal({ entity, user, isOpen, onClose }: UserD
       case 'Sparkles': return Sparkles;
       case 'CheckCircle2': return CheckCircle2;
       case 'Shield': return Shield;
+      case 'ShieldAlert': return ShieldAlert;
       case 'Zap': return Zap;
       case 'AlertTriangle': return AlertTriangle;
       case 'Trash2': return Trash2;

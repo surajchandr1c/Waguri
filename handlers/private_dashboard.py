@@ -17,6 +17,7 @@ def build_private_start_markup(bot_username: str = "Ms_Waguri_bot") -> tuple[str
         "👑 <b>Welcome to Waguri Management Platform!</b>\n\n"
         "Waguri is an advanced multi-group and multi-channel Telegram moderation and management bot.\n\n"
         "<b>Key Features:</b>\n"
+        "• 🚨 Abuse Detection & Auto-Moderation (Harassment & Vulgarity Shield)\n"
         "• 🔗 Automatic Anti-Link & Whitelist Protection\n"
         "• 🛡️ Anti-Spam (Progressive Warnings & 24h Mute)\n"
         "• 🌊 Flood & Burst Message Detection\n"
@@ -185,6 +186,7 @@ async def handle_private_callback(update: Update, context: ContextTypes.DEFAULT_
         stats = get_group_stats(target_cid)
         chat_title = html.escape(settings.get("chat_title") or str(target_cid))
 
+        abuse_st = "🟢 ON" if settings.get("abuse_detection_enabled", True) else "🔴 OFF"
         link_st = "🟢 ON" if settings["anti_link_enabled"] else "🔴 OFF"
         spam_st = "🟢 ON" if settings["anti_spam_enabled"] else "🔴 OFF"
         flood_st = "🟢 ON" if settings["flood_detection_enabled"] else "🔴 OFF"
@@ -197,6 +199,7 @@ async def handle_private_callback(update: Update, context: ContextTypes.DEFAULT_
             f"⚙️ <b>Management Summary: {chat_title}</b>\n"
             f"🆔 <b>ID:</b> <code>{target_cid}</code> | <b>Type:</b> {settings['chat_type']}\n\n"
             f"<b>Protection Status:</b>\n"
+            f"• Abuse Detection: {abuse_st}\n"
             f"• Anti-Link: {link_st}\n"
             f"• Anti-Spam: {spam_st}\n"
             f"• Flood Detection: {flood_st}\n"
@@ -206,6 +209,7 @@ async def handle_private_callback(update: Update, context: ContextTypes.DEFAULT_
             f"• Raid Emergency Mode: {raid_st}\n\n"
             f"<b>Statistics:</b>\n"
             f"• Messages Checked: {stats['total_messages_checked']}\n"
+            f"• Abuse Deleted: {stats.get('abuse_deleted', 0)}\n"
             f"• Links Deleted: {stats['links_deleted']}\n"
             f"• Spam Deleted: {stats['spam_deleted']}\n"
             f"• Warnings: {stats['warnings_issued']} | Restrictions: {stats['restrictions_applied']}\n\n"
@@ -254,6 +258,7 @@ async def handle_private_callback(update: Update, context: ContextTypes.DEFAULT_
     elif action == "features":
         text = (
             "⚡ <b>Waguri Feature Overview</b>\n\n"
+            "• <b>Abuse Detection & Auto-Moderation:</b> Filters vulgarity, slurs, harassment, threats, and bypass attempts with progressive warnings and mutes.\n"
             "• <b>Anti-Link Protection:</b> Deletes unauthorized URLs, Telegram invites, deep links, and caption links with whitelist support.\n"
             "• <b>Anti-Spam System:</b> 4-stage progressive sequence (allow $\\rightarrow$ warn 1 $\\rightarrow$ warn 2 $\\rightarrow$ 24h mute + cleanup).\n"
             "• <b>Flood Protection:</b> Monitors high-frequency burst messaging to keep chats peaceful.\n"

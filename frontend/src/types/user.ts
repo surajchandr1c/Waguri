@@ -75,6 +75,7 @@ export interface BotGroupChat {
   featuresUsed: BotFeatureUsage[];
   stats: {
     messagesChecked: number;
+    abuseDeleted?: number;
     linksDeleted: number;
     spamDeleted: number;
     warningsIssued: number;

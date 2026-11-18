@@ -55,7 +55,7 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.effective_message:
         await update.effective_message.reply_text(
             "Waguri (@Ms_Waguri_bot) is an advanced Telegram group and channel moderation bot built with Python.\n\n"
-            "Features include automatic anti-link protection with whitelisting, repeated message spam detection, "
+            "Features include Abuse Detection & Auto-Moderation, automatic anti-link protection with whitelisting, repeated message spam detection, "
             "progressive warnings, temporary restrictions, flood control, media filters, and group greetings."
         )
 

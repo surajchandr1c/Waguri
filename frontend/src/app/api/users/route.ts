@@ -230,6 +230,21 @@ export async function GET() {
 
       const gcFeatures: BotFeatureUsage[] = [
         {
+          id: 'feat_gc_abuse',
+          name: 'Abuse Detection & Auto-Moderation',
+          category: 'moderation',
+          iconName: 'ShieldAlert',
+          status: (settings.abuse_detection_enabled ?? true) ? 'active' : 'disabled',
+          statusLabel: (settings.abuse_detection_enabled ?? true) ? 'Active Shield' : 'Disabled',
+          description: 'Automated removal of vulgarity, slurs, sexual harassment, and assault threats.',
+          configDetails: {
+            'Abuse Shield': (settings.abuse_detection_enabled ?? true) ? 'Enabled' : 'Disabled',
+            'Warning Threshold': `${settings.abuse_warning_limit ?? 3} Warnings`,
+            'Mute Duration': `${settings.abuse_mute_duration_minutes ?? 30} Minutes`,
+            'Bypass Shield': (settings.abuse_bypass_detection ?? true) ? 'Enabled' : 'Disabled',
+          },
+        },
+        {
           id: 'feat_gc_antilink',
           name: 'Anti-Link Enforcement',
           category: 'moderation',
@@ -306,6 +321,7 @@ export async function GET() {
         featuresUsed: gcFeatures,
         stats: {
           messagesChecked: statsRow.total_messages_checked || 0,
+          abuseDeleted: statsRow.abuse_deleted || 0,
           linksDeleted: statsRow.links_deleted || 0,
           spamDeleted: statsRow.spam_deleted || 0,
           warningsIssued: statsRow.warnings_issued || 0,
@@ -317,7 +333,7 @@ export async function GET() {
             timestamp: 'Active',
             action: 'Group Protected',
             category: 'group',
-            details: `Waguri added to group. Enforcing Anti-Link, Anti-Spam, and CleanService.`,
+            details: `Waguri added to group. Enforcing Abuse Shield, Anti-Link, Anti-Spam, and CleanService.`,
           },
         ],
       });

@@ -117,8 +117,8 @@ RESTRICTION_MSG: str = (
 GROUP_WELCOME_MSG: str = (
     "👋 Hello! I am Waguri.\n\n"
     "Thank you for adding me to your group.\n\n"
-    "I can help protect your group from spam and unwanted links.\n\n"
-    "To configure me, use /settings.\n\n"
+    "I can help protect your group from abuse, vulgarity, spam, and unwanted links.\n\n"
+    "To configure me, use /settings or /features.\n\n"
     "Please make me an administrator and grant the required permissions."
 )
 
