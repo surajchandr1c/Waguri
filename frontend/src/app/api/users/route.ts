@@ -13,6 +13,7 @@ export async function GET() {
   const chatSettings: Record<string, any>[] = (dbData?.chat_settings as any[]) || [];
   const chatStatistics: Record<string, any>[] = (dbData?.chat_statistics as any[]) || [];
   const chatJoinEvents: Record<string, any>[] = (dbData?.chat_join_events as any[]) || [];
+  const chatModerationLogs: Record<string, any>[] = (dbData?.chat_moderation_logs as any[]) || [];
 
   // ONLY USERS WHO ADDED THE BOT ON PERSONAL DIRECT MESSAGES
   const users: BotUser[] = [];
@@ -181,8 +182,8 @@ export async function GET() {
           },
         ],
         stats: {
-          postsProcessed: 28,
-          linksFiltered: 0,
+          postsProcessed: statsRow.total_messages_checked || 0,
+          linksFiltered: statsRow.links_deleted || 0,
         },
         recentActivity: [
           {
@@ -284,7 +285,7 @@ export async function GET() {
         chatId: c.chat_id,
         title: c.chat_title || 'Group Chat',
         type: c.chat_type === 'supergroup' ? 'supergroup' : 'group',
-        memberCount: groupJoins.length || (c.chat_type === 'supergroup' ? 42 : 12),
+        memberCount: c.member_count || groupJoins.length || 1,
         isActive: Boolean(c.is_active),
         avatarGradient: c.chat_type === 'supergroup' ? 'from-indigo-600 via-sky-500 to-blue-600' : 'from-sky-500 to-teal-500',
         addedAt: new Date((c.added_at || Date.now() / 1000) * 1000).toLocaleDateString(),
@@ -297,15 +298,23 @@ export async function GET() {
           warningsIssued: statsRow.warnings_issued || 0,
           usersRestricted: statsRow.restrictions_applied || 0,
         },
-        recentActivity: [
-          {
-            id: `act_gc_${c.chat_id}_1`,
-            timestamp: 'Active',
-            action: 'Group Protected',
-            category: 'group',
-            details: `Waguri added to group. Enforcing Abuse Shield, Anti-Link, Anti-Spam, and CleanService.`,
-          },
-        ],
+        recentActivity: (chatModerationLogs.filter((m) => m.chat_id === c.chat_id).slice(0, 8).map((m, idx) => ({
+          id: `act_gc_${c.chat_id}_${m.id || idx}`,
+          timestamp: m.timestamp ? new Date(m.timestamp * 1000).toLocaleString() : 'Recent',
+          action: m.action || 'Moderation Action',
+          category: 'group' as const,
+          details: m.details || 'Moderation enforcement performed.',
+        }))).concat(
+          chatModerationLogs.filter((m) => m.chat_id === c.chat_id).length === 0
+            ? [{
+                id: `act_gc_${c.chat_id}_1`,
+                timestamp: new Date((c.added_at || Date.now() / 1000) * 1000).toLocaleDateString(),
+                action: 'Group Protected',
+                category: 'group' as const,
+                details: `Waguri added to group. Enforcing Abuse Shield, Anti-Link, Anti-Spam, and CleanService.`,
+              }]
+            : []
+        ),
       });
     }
   }

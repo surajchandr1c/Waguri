@@ -127,7 +127,7 @@ export default function OverviewPage() {
 
             <div className="flex items-baseline justify-between">
               <div className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight">
-                {today?.active_users_count ?? 2}
+                {today ? today.active_users_count : (data ? 0 : '...')}
               </div>
               <span className="text-xs text-zinc-400 group-hover:text-white flex items-center gap-1 font-medium transition-colors">
                 <span>User Panel</span>
@@ -148,7 +148,7 @@ export default function OverviewPage() {
             </div>
 
             <div className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight">
-              {today ? today.links_deleted : 48}
+              {today ? today.links_deleted : (data ? 0 : '...')}
             </div>
           </div>
 
@@ -164,7 +164,7 @@ export default function OverviewPage() {
             </div>
 
             <div className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight">
-              {today ? today.messages_deleted : 112}
+              {today ? today.messages_deleted : (data ? 0 : '...')}
             </div>
           </div>
 
@@ -180,7 +180,7 @@ export default function OverviewPage() {
             </div>
 
             <div className="text-3xl sm:text-4xl font-black text-white font-mono tracking-tight">
-              {today ? today.users_blocked : 6}
+              {today ? today.users_blocked : (data ? 0 : '...')}
             </div>
           </div>
 

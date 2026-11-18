@@ -251,11 +251,11 @@ export async function getDailyStatsService() {
 
   const today: DailyStatsData = {
     stat_date: todayStr,
-    links_deleted: rawToday ? Number(rawToday.links_deleted || 0) : 48,
-    messages_deleted: rawToday ? Number(rawToday.messages_deleted || 0) : 112,
-    users_blocked: rawToday ? Number(rawToday.users_blocked || 0) : 6,
+    links_deleted: rawToday ? Number(rawToday.links_deleted || 0) : 0,
+    messages_deleted: rawToday ? Number(rawToday.messages_deleted || 0) : 0,
+    users_blocked: rawToday ? Number(rawToday.users_blocked || 0) : 0,
     features_count: 33,
-    active_users_count: sqliteData.uniqueUsersCount || 56,
+    active_users_count: sqliteData.uniqueUsersCount || 0,
     reset_at: (rawToday?.reset_at as string) || `${todayStr}T00:00:00`,
     updated_at: (rawToday?.updated_at as string) || new Date().toISOString(),
     secondsUntilReset,
@@ -268,7 +268,7 @@ export async function getDailyStatsService() {
     messages_deleted: Number(h.messages_deleted || 0),
     users_blocked: Number(h.users_blocked || 0),
     features_count: Number(h.features_count || 33),
-    active_users_count: Number(sqliteData.uniqueUsersCount || h.active_users_count || 56),
+    active_users_count: Number(sqliteData.uniqueUsersCount || h.active_users_count || 0),
     archived_at: String(h.archived_at || ''),
   }));
 
@@ -276,16 +276,6 @@ export async function getDailyStatsService() {
     databaseEngine: 'MongoDB Atlas Active',
     postgresConnected: false,
     today,
-    history24h: history24h.length > 0 ? history24h : [
-      {
-        stat_date: 'Yesterday (24h Window)',
-        links_deleted: 35,
-        messages_deleted: 89,
-        users_blocked: 4,
-        features_count: 33,
-        active_users_count: 19,
-        archived_at: '12:00 AM Midnight',
-      },
-    ],
+    history24h,
   };
 }
