@@ -9,11 +9,7 @@ import {
   Save, 
   RefreshCw, 
   AlertCircle, 
-  Sliders, 
-  Sparkles,
-  Lock,
-  Layers,
-  Activity
+  Sliders
 } from 'lucide-react';
 import { SystemSettings } from '@/types/schema';
 

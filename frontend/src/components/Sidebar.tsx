@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { 
   Bot, 
   Home, 
@@ -21,6 +21,7 @@ import {
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [userCount, setUserCount] = useState<number | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
@@ -32,7 +33,8 @@ export default function Sidebar() {
     } catch (err) {
       console.error('Logout error in sidebar:', err);
     } finally {
-      window.location.href = '/login';
+      router.push('/login');
+      router.refresh();
     }
   };
 

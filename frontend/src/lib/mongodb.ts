@@ -10,7 +10,7 @@ try {
 }
 
 export interface AdminDocument {
-  _id?: any;
+  _id?: import('mongodb').ObjectId | string;
   email: string;
   passwordHash: string;
   role: 'admin' | 'superadmin';
@@ -20,19 +20,19 @@ export interface AdminDocument {
   lastLoginAt?: string;
 }
 
-const DEFAULT_DIRECT_URI =
-  'mongodb://sunbaby7319_db_user:HePIfODpTWKlxrhs@ac-t0bmmd7-shard-00-00.y7u511m.mongodb.net:27017,ac-t0bmmd7-shard-00-01.y7u511m.mongodb.net:27017,ac-t0bmmd7-shard-00-02.y7u511m.mongodb.net:27017/waguri_db?ssl=true&replicaSet=atlas-ss86yh-shard-0&authSource=admin&retryWrites=true&w=majority';
-
 const uri =
   process.env.MONGODB_DIRECT_URI ||
-  DEFAULT_DIRECT_URI ||
   process.env.MONGODB_URI ||
-  process.env.MONGO_URI;
+  process.env.MONGO_URI ||
+  '';
 
 const dbName = process.env.MONGODB_DB_NAME || 'waguri_db';
 
+if (!uri) {
+  console.warn('[MongoDB] Warning: MONGODB_URI is not set in environment.');
+}
+
 declare global {
-  // eslint-disable-next-line no-var
   var _mongoClientPromise: Promise<MongoClient> | undefined;
 }
 

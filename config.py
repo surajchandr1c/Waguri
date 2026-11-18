@@ -91,10 +91,12 @@ DEFAULT_ALLOWED_MEDIA: dict[str, bool] = {
 }
 
 ADMIN_CACHE_TTL_SECONDS: int = 120  # Cache admin status for 2 minutes to reduce API load
+MONGODB_DIRECT_URI: str | None = os.getenv("MONGODB_DIRECT_URI")
 MONGODB_URI: str = (
-    os.getenv("MONGODB_URI")
+    os.getenv("MONGODB_DIRECT_URI")
+    or os.getenv("MONGODB_URI")
     or os.getenv("MONGO_URI")
-    or "mongodb+srv://sunbaby7319_db_user:HePIfODpTWKlxrhs@waguri.y7u511m.mongodb.net/waguri_db?retryWrites=true&w=majority"
+    or ""
 )
 MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "waguri_db")
 DATABASE_PATH: str = os.getenv("DATABASE_PATH", "MongoDB Atlas (waguri_db)")

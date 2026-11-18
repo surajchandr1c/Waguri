@@ -247,7 +247,7 @@ export async function getDailyStatsService() {
 
   // SQLite Fallback / Local Storage
   const sqliteData = fetchSqliteDailyStats();
-  const rawToday = sqliteData.dailyStats.find((r: any) => r.stat_date === todayStr) || sqliteData.dailyStats[0];
+  const rawToday = sqliteData.dailyStats.find((r: Record<string, unknown>) => r.stat_date === todayStr) || sqliteData.dailyStats[0];
 
   const today: DailyStatsData = {
     stat_date: todayStr,
@@ -256,20 +256,20 @@ export async function getDailyStatsService() {
     users_blocked: rawToday ? Number(rawToday.users_blocked || 0) : 6,
     features_count: 33,
     active_users_count: sqliteData.uniqueUsersCount || 56,
-    reset_at: rawToday?.reset_at || `${todayStr}T00:00:00`,
-    updated_at: rawToday?.updated_at || new Date().toISOString(),
+    reset_at: (rawToday?.reset_at as string) || `${todayStr}T00:00:00`,
+    updated_at: (rawToday?.updated_at as string) || new Date().toISOString(),
     secondsUntilReset,
     nextResetIso,
   };
 
-  const history24h: StatsHistoryItem[] = (sqliteData.history || []).map((h: any) => ({
-    stat_date: h.stat_date,
-    links_deleted: Number(h.links_deleted),
-    messages_deleted: Number(h.messages_deleted),
-    users_blocked: Number(h.users_blocked),
+  const history24h: StatsHistoryItem[] = (sqliteData.history || []).map((h: Record<string, unknown>) => ({
+    stat_date: String(h.stat_date),
+    links_deleted: Number(h.links_deleted || 0),
+    messages_deleted: Number(h.messages_deleted || 0),
+    users_blocked: Number(h.users_blocked || 0),
     features_count: Number(h.features_count || 33),
     active_users_count: Number(sqliteData.uniqueUsersCount || h.active_users_count || 56),
-    archived_at: h.archived_at,
+    archived_at: String(h.archived_at || ''),
   }));
 
   return {

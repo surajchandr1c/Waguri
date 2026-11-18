@@ -180,7 +180,7 @@ export default function StickersPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'toggle', id, status: newStatus }),
       });
-      const data = await res.json();
+      const _data = await res.json();
       if (res.ok) {
         setStickers((prev) =>
           prev.map((s) => (s.id === id ? { ...s, status: newStatus as any } : s))

@@ -7,7 +7,6 @@ import {
   Send, 
   Calendar, 
   Clock, 
-  Repeat, 
   Globe, 
   Trash2, 
   Play, 

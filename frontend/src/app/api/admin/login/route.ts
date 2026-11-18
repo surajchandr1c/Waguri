@@ -123,7 +123,7 @@ export async function POST(request: NextRequest) {
 
     response.cookies.set(AUTH_COOKIE_NAME, token, getAuthCookieOptions());
     return response;
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[Auth API Error]', error);
     return NextResponse.json(
       { error: 'An unexpected internal error occurred during authentication.' },

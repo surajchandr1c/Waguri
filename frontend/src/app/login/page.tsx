@@ -72,9 +72,10 @@ export default function LoginPage() {
       
       // Smooth redirect to dashboard
       setTimeout(() => {
-        window.location.href = '/';
+        router.push('/');
+        router.refresh();
       }, 600);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Login request error:', err);
       setErrorMessage('Network or server error encountered. Please try again.');
       setIsLoading(false);

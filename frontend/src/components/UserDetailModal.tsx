@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   X, 
   Copy, 
@@ -40,17 +40,17 @@ export default function UserDetailModal({ entity, user, isOpen, onClose }: UserD
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
 
-  // Reset confirmation whenever opened or entity changes
-  useEffect(() => {
+  const handleClose = useCallback(() => {
     setConfirmRemove(false);
     setRemoveError(null);
     setRemoving(false);
-  }, [isOpen, currentEntity]);
+    onClose();
+  }, [onClose]);
 
   // Handle ESC key press
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') handleClose();
     };
     if (isOpen) {
       window.addEventListener('keydown', handleKeyDown);
@@ -60,7 +60,7 @@ export default function UserDetailModal({ entity, user, isOpen, onClose }: UserD
       window.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = '';
     };
-  }, [isOpen, onClose]);
+  }, [isOpen, handleClose]);
 
   if (!isOpen || !currentEntity) return null;
 
@@ -330,8 +330,9 @@ export default function UserDetailModal({ entity, user, isOpen, onClose }: UserD
                     const errJson = await res.json();
                     setRemoveError(errJson.error || 'Removal failed');
                   }
-                } catch (err: any) {
-                  setRemoveError(err.message || 'Network error');
+                } catch (err: unknown) {
+                  const message = err instanceof Error ? err.message : 'Network error';
+                  setRemoveError(message);
                 } finally {
                   setRemoving(false);
                 }

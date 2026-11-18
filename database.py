@@ -22,17 +22,67 @@ def get_db_path() -> str:
     return f"MongoDB Atlas ({db_name})"
 
 
+class MongoConnectionContext:
+    """Compatibility wrapper that supports both direct collection access and context manager protocol."""
+
+    def __init__(self, db: Any):
+        self._db = db
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    def execute(self, sql: str, *args, **kwargs):
+        """Compatibility helper for legacy test scripts that call execute on connection."""
+        sql_clean = sql.strip().upper()
+        if sql_clean.startswith("DELETE FROM"):
+            parts = sql.strip().split()
+            if len(parts) >= 3:
+                table_name = parts[2].strip("`\"';")
+                try:
+                    self._db[table_name].delete_many({})
+                except Exception:
+                    pass
+        return self
+
+    def commit(self):
+        """No-op commit for database compatibility."""
+        pass
+
+    def __getitem__(self, name: str):
+        return self._db[name]
+
+    def __getattr__(self, name: str):
+        return getattr(self._db, name)
+
+
 def get_client() -> MongoClient:
-    """Retrieve or initialize the thread-safe singleton MongoDB client."""
+    """Retrieve or initialize the thread-safe singleton MongoDB client with connection pooling."""
     global _mongo_client
     if _mongo_client is None:
         uri = (
-            getattr(config, "MONGODB_URI", None)
+            getattr(config, "MONGODB_DIRECT_URI", None)
+            or os.getenv("MONGODB_DIRECT_URI")
+            or getattr(config, "MONGODB_URI", None)
             or os.getenv("MONGODB_URI")
             or os.getenv("MONGO_URI")
-            or "mongodb+srv://sunbaby7319_db_user:HePIfODpTWKlxrhs@waguri.y7u511m.mongodb.net/waguri_db?retryWrites=true&w=majority"
         )
-        _mongo_client = MongoClient(uri, serverSelectionTimeoutMS=10000)
+        if not uri:
+            raise RuntimeError(
+                "MongoDB connection URI is not configured. "
+                "Please set MONGODB_URI in your .env file."
+            )
+        _mongo_client = MongoClient(
+            uri,
+            serverSelectionTimeoutMS=10000,
+            connectTimeoutMS=10000,
+            maxPoolSize=50,
+            minPoolSize=5,
+            maxIdleTimeMS=30000,
+            waitQueueTimeoutMS=5000,
+        )
     return _mongo_client
 
 
@@ -44,8 +94,8 @@ def get_db(db_name: str | None = None):
 
 
 def get_connection(db_path: str | None = None):
-    """Compatibility helper returning the active MongoDB database instance."""
-    return get_db()
+    """Compatibility helper returning the active MongoDB database instance wrapped with context manager support."""
+    return MongoConnectionContext(get_db())
 
 
 def get_next_sequence(sequence_name: str, db=None) -> int:

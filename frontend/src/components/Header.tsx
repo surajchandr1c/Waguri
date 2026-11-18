@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { ShieldCheck, Send, LogOut, Loader2 } from 'lucide-react';
 
 interface HeaderProps {
@@ -10,6 +11,7 @@ interface HeaderProps {
 }
 
 export default function Header({ title, description, badge }: HeaderProps) {
+  const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
 
   const handleLogout = async () => {
@@ -19,7 +21,8 @@ export default function Header({ title, description, badge }: HeaderProps) {
     } catch (err) {
       console.error('Logout error:', err);
     } finally {
-      window.location.href = '/login';
+      router.push('/login');
+      router.refresh();
     }
   };
 

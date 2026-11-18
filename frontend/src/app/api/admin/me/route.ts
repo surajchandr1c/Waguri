@@ -22,10 +22,9 @@ export async function GET(request: NextRequest) {
     }
 
     const admins = await getAdminCollection();
-    let query: any = { email: payload.email };
-    if (ObjectId.isValid(payload.userId)) {
-      query = { _id: new ObjectId(payload.userId) };
-    }
+    const query = ObjectId.isValid(payload.userId)
+      ? { _id: new ObjectId(payload.userId) }
+      : { email: payload.email };
 
     const admin = await admins.findOne(query);
     if (!admin || admin.isActive === false) {
@@ -43,7 +42,15 @@ export async function GET(request: NextRequest) {
         lastLoginAt: admin.lastLoginAt,
       },
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'digest' in error &&
+      (error as { digest?: string }).digest === 'NEXT_PRERENDER_INTERRUPTED'
+    ) {
+      throw error;
+    }
     console.error('[Admin Me API Error]', error);
     return NextResponse.json(
       { authenticated: false, error: 'Failed to verify admin session.' },

@@ -1,54 +1,14 @@
 import { NextResponse } from 'next/server';
-import { spawnSync } from 'node:child_process';
-import path from 'node:path';
-import fs from 'node:fs';
-
-function getScriptPath() {
-  const candidates = [
-    path.join(process.cwd(), '..', 'promotions_manager.py'),
-    path.join(process.cwd(), 'promotions_manager.py'),
-    'c:\\Users\\Suraj\\Desktop\\New folder\\bot\\promotions_manager.py',
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(/*turbopackIgnore: true*/ c)) return c;
-  }
-  return 'promotions_manager.py';
-}
-
-function runScript(args: string[], stdinData?: string) {
-  const scriptPath = getScriptPath();
-  const res = spawnSync('python', [scriptPath, ...args], {
-    input: stdinData,
-    encoding: 'utf-8',
-    timeout: 25000,
-    windowsHide: true,
-  });
-
-  if (res.error) {
-    throw res.error;
-  }
-
-  const stdout = (res.stdout || '').trim();
-  if (!stdout) {
-    if (res.stderr) throw new Error(res.stderr);
-    return null;
-  }
-
-  try {
-    return JSON.parse(stdout);
-  } catch (err) {
-    console.error('Failed to parse script output:', stdout);
-    throw err;
-  }
-}
+import { runPythonScript } from '@/lib/pythonBridge';
 
 export async function GET() {
   try {
-    const data = runScript(['--list']);
+    const data = runPythonScript('promotions_manager.py', ['--list']);
     return NextResponse.json(data || { promotions: [], logs: [], chats: [], total_gcs: 0 });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to load promotions';
     console.error('Failed to load promotions:', err);
-    return NextResponse.json({ error: err.message || 'Failed to load promotions' }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
@@ -75,7 +35,7 @@ export async function POST(req: Request) {
         repeat_interval: schedule_type === 'recurring' ? repeat_interval : 'none',
       });
 
-      const res = runScript(['--add'], payload);
+      const res = runPythonScript('promotions_manager.py', ['--add'], payload);
       return NextResponse.json(res);
     } else if (action === 'edit') {
       const { id, title, message, link_url, button_text, target_type, target_chat_ids, schedule_type, scheduled_time, repeat_interval, status } = body;
@@ -97,28 +57,29 @@ export async function POST(req: Request) {
         status: status || 'active',
       });
 
-      const res = runScript(['--edit', String(id)], payload);
+      const res = runPythonScript('promotions_manager.py', ['--edit', String(id)], payload);
       return NextResponse.json(res);
     } else if (action === 'delete') {
       const { id } = body;
       if (!id) return NextResponse.json({ error: 'Missing promotion ID' }, { status: 400 });
-      const res = runScript(['--delete', String(id)]);
+      const res = runPythonScript('promotions_manager.py', ['--delete', String(id)]);
       return NextResponse.json(res);
     } else if (action === 'toggle') {
       const { id, status } = body;
       if (!id || !status) return NextResponse.json({ error: 'Missing ID or status' }, { status: 400 });
-      const res = runScript(['--toggle', String(id), String(status)]);
+      const res = runPythonScript('promotions_manager.py', ['--toggle', String(id), String(status)]);
       return NextResponse.json(res);
     } else if (action === 'broadcast' || action === 'send_now') {
       const { id } = body;
       if (!id) return NextResponse.json({ error: 'Missing promotion ID' }, { status: 400 });
-      const res = runScript(['--broadcast', String(id)]);
+      const res = runPythonScript('promotions_manager.py', ['--broadcast', String(id)]);
       return NextResponse.json(res);
     }
 
     return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Promotion action failed';
     console.error('Promotions action failed:', err);
-    return NextResponse.json({ error: err.message || 'Promotion action failed' }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -1,48 +1,18 @@
 import { NextResponse } from 'next/server';
-import { execSync } from 'node:child_process';
-import path from 'node:path';
-import fs from 'node:fs';
+import { fetchRawDatabaseData, runPythonScript } from '@/lib/pythonBridge';
 import { BotUser, BotGroupChat, BotChannel, BotFeatureUsage, UserActivity } from '@/types/user';
 
-function fetchRawDatabaseData() {
-  const candidateScripts = [
-    path.join(process.cwd(), '..', 'get_users_data.py'),
-    path.join(process.cwd(), 'get_users_data.py'),
-    'c:\\Users\\Suraj\\Desktop\\New folder\\bot\\get_users_data.py',
-  ];
-
-  for (const script of candidateScripts) {
-    if (fs.existsSync(/*turbopackIgnore: true*/ script)) {
-      try {
-        const stdout = execSync(`python "${script}"`, {
-          timeout: 15000,
-          encoding: 'utf-8',
-          windowsHide: true,
-        });
-        const parsed = JSON.parse(stdout);
-        if (parsed && !parsed.error) {
-          return parsed;
-        }
-      } catch (err) {
-        console.warn(`Execution failed for ${script}:`, err);
-      }
-    }
-  }
-
-  return null;
-}
-
 export async function GET() {
-  const dbData = fetchRawDatabaseData();
+  const dbData = fetchRawDatabaseData<Record<string, unknown>>();
 
-  const businessConnections: any[] = dbData?.business_connections || [];
-  const personalSettings: any[] = dbData?.personal_reply_settings || [];
-  const personalTemplates: any[] = dbData?.personal_reply_templates || [];
-  const businessReplyLogs: any[] = dbData?.business_reply_logs || [];
-  const rawChats: any[] = dbData?.chats || [];
-  const chatSettings: any[] = dbData?.chat_settings || [];
-  const chatStatistics: any[] = dbData?.chat_statistics || [];
-  const chatJoinEvents: any[] = dbData?.chat_join_events || [];
+  const businessConnections: Record<string, any>[] = (dbData?.business_connections as any[]) || [];
+  const personalSettings: Record<string, any>[] = (dbData?.personal_reply_settings as any[]) || [];
+  const personalTemplates: Record<string, any>[] = (dbData?.personal_reply_templates as any[]) || [];
+  const businessReplyLogs: Record<string, any>[] = (dbData?.business_reply_logs as any[]) || [];
+  const rawChats: Record<string, any>[] = (dbData?.chats as any[]) || [];
+  const chatSettings: Record<string, any>[] = (dbData?.chat_settings as any[]) || [];
+  const chatStatistics: Record<string, any>[] = (dbData?.chat_statistics as any[]) || [];
+  const chatJoinEvents: Record<string, any>[] = (dbData?.chat_join_events as any[]) || [];
 
   // ONLY USERS WHO ADDED THE BOT ON PERSONAL DIRECT MESSAGES
   const users: BotUser[] = [];
@@ -358,63 +328,31 @@ export async function POST(req: Request) {
     const body = await req.json();
     const action = body.action;
 
-    const candidateScripts = [
-      path.join(process.cwd(), '..', 'get_users_data.py'),
-      path.join(process.cwd(), 'get_users_data.py'),
-      'c:\\Users\\Suraj\\Desktop\\New folder\\bot\\get_users_data.py',
-    ];
-
-    let scriptPath = '';
-    for (const script of candidateScripts) {
-      if (fs.existsSync(/*turbopackIgnore: true*/ script)) {
-        scriptPath = script;
-        break;
-      }
-    }
-
-    if (!scriptPath) {
-      return NextResponse.json({ error: 'Failed to locate handler script' }, { status: 500 });
-    }
-
-    const runPy = (args: string[], stdinData?: string) => {
-      const { spawnSync } = require('node:child_process');
-      const res = spawnSync('python', [scriptPath, ...args], {
-        input: stdinData,
-        encoding: 'utf-8',
-        timeout: 15000,
-        windowsHide: true,
-      });
-      if (res.error) throw res.error;
-      const stdout = (res.stdout || '').trim();
-      if (!stdout && res.stderr) throw new Error(res.stderr);
-      return JSON.parse(stdout || '{}');
-    };
-
     if (action === 'add_chat') {
-      const res = runPy(['--chat-add'], JSON.stringify(body.data || body));
+      const res = runPythonScript('get_users_data.py', ['--chat-add'], JSON.stringify(body.data || body));
       return NextResponse.json(res);
     } else if (action === 'edit_chat') {
       const id = body.id || body.chat_id;
       if (!id) return NextResponse.json({ error: 'Missing chat id' }, { status: 400 });
-      const res = runPy(['--chat-edit', String(id)], JSON.stringify(body.data || body));
+      const res = runPythonScript('get_users_data.py', ['--chat-edit', String(id)], JSON.stringify(body.data || body));
       return NextResponse.json(res);
     } else if (action === 'delete_chat') {
       const id = body.id || body.chat_id;
       if (!id) return NextResponse.json({ error: 'Missing chat id' }, { status: 400 });
-      const res = runPy(['--chat-delete', String(id)]);
+      const res = runPythonScript('get_users_data.py', ['--chat-delete', String(id)]);
       return NextResponse.json(res);
     } else if (action === 'add_user') {
-      const res = runPy(['--user-add'], JSON.stringify(body.data || body));
+      const res = runPythonScript('get_users_data.py', ['--user-add'], JSON.stringify(body.data || body));
       return NextResponse.json(res);
     } else if (action === 'edit_user') {
       const id = body.id || body.user_id;
       if (!id) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
-      const res = runPy(['--user-edit', String(id)], JSON.stringify(body.data || body));
+      const res = runPythonScript('get_users_data.py', ['--user-edit', String(id)], JSON.stringify(body.data || body));
       return NextResponse.json(res);
     } else if (action === 'delete_user') {
       const id = body.id || body.user_id;
       if (!id) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
-      const res = runPy(['--user-delete', String(id)]);
+      const res = runPythonScript('get_users_data.py', ['--user-delete', String(id)]);
       return NextResponse.json(res);
     }
 
@@ -424,10 +362,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing id or type parameter' }, { status: 400 });
     }
 
-    const res = runPy(['--remove', String(type), String(id)]);
+    const res = runPythonScript('get_users_data.py', ['--remove', String(type), String(id)]);
     return NextResponse.json(res);
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Operation failed';
     console.error('User/Chat operation failed:', err);
-    return NextResponse.json({ error: err.message || 'Operation failed' }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
