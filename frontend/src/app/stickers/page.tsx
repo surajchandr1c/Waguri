@@ -14,8 +14,6 @@ import {
   Plus, 
   X, 
   Pencil, 
-  ChevronDown, 
-  ChevronUp, 
   Layers, 
   Users,
   Sparkles
@@ -39,17 +37,6 @@ interface ScheduledStickerItem {
   created_at?: string;
 }
 
-interface StickerLog {
-  id: number;
-  scheduled_id?: number;
-  chat_id: number;
-  chat_title: string;
-  sticker_url: string;
-  sent_at: string;
-  status: string;
-  details?: string;
-}
-
 interface ChatOption {
   chat_id: number;
   chat_title: string;
@@ -71,7 +58,6 @@ const INTERVAL_OPTIONS = [
 
 export default function StickersPage() {
   const [stickers, setStickers] = useState<ScheduledStickerItem[]>([]);
-  const [logs, setLogs] = useState<StickerLog[]>([]);
   const [chats, setChats] = useState<ChatOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -81,7 +67,6 @@ export default function StickersPage() {
   // UI State
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [filterTab, setFilterTab] = useState<'all' | 'active' | 'paused'>('all');
-  const [showLogs, setShowLogs] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Create Form State
@@ -109,7 +94,6 @@ export default function StickersPage() {
       if (res.ok) {
         const data = await res.json();
         if (data.scheduled_stickers) setStickers(data.scheduled_stickers);
-        if (data.logs) setLogs(data.logs);
         if (data.chats) {
           setChats(data.chats);
           const firstGC = data.chats.find((c: ChatOption) => c.chat_type === 'group' || c.chat_type === 'supergroup');
@@ -683,39 +667,6 @@ export default function StickersPage() {
             </div>
           )}
         </div>
-
-        {/* Collapsible Delivery Logs */}
-        {logs.length > 0 && (
-          <div className="rounded-2xl bg-zinc-950 border border-zinc-800 overflow-hidden">
-            <button
-              onClick={() => setShowLogs(!showLogs)}
-              className="w-full p-4 flex items-center justify-between text-left text-xs font-semibold text-zinc-300 hover:text-white transition-colors cursor-pointer"
-            >
-              <div className="flex items-center gap-2">
-                <Clock className="w-3.5 h-3.5 text-zinc-400" />
-                <span>Recent Sticker Deliveries ({logs.length})</span>
-              </div>
-              {showLogs ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-            </button>
-
-            {showLogs && (
-              <div className="p-4 border-t border-zinc-800 divide-y divide-zinc-800/60 text-xs">
-                {logs.slice(0, 8).map((log) => (
-                  <div key={log.id} className="py-2 flex items-center justify-between gap-3 text-zinc-300">
-                    <div className="flex items-center gap-2 truncate">
-                      <span className="font-semibold text-white truncate">{log.chat_title}</span>
-                      <span className="text-zinc-500">•</span>
-                      <span className="text-zinc-400 truncate">{log.details || log.status}</span>
-                    </div>
-                    <span className="text-[10px] text-zinc-500 font-mono shrink-0">
-                      {new Date(log.sent_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
 
         {/* Clean Edit Modal (No Date/Time Picker - Just Pack Link, Target, Interval, and Status) */}
         {editingSticker && (
