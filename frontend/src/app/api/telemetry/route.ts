@@ -1,15 +1,16 @@
 import { NextResponse } from 'next/server';
-import { fetchRawDatabaseData } from '@/lib/pythonBridge';
+import { runPythonScript } from '@/lib/pythonBridge';
 
 export async function GET(_request: Request) {
-  const data = fetchRawDatabaseData();
-  if (!data) {
-    return NextResponse.json({ error: 'Failed to read MongoDB database' }, { status: 500 });
-  }
+  try {
+    const data = await runPythonScript('get_users_data.py', ['--overview']);
+    if (!data) {
+      throw new Error('Overview telemetry returned no data.');
+    }
 
-  return NextResponse.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    ...data,
-  });
+    return NextResponse.json(data);
+  } catch (error) {
+    console.error('Failed to load dashboard telemetry:', error);
+    return NextResponse.json({ error: 'Failed to load dashboard telemetry.' }, { status: 500 });
+  }
 }

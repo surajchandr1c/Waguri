@@ -3,8 +3,9 @@ import { runPythonScript } from '@/lib/pythonBridge';
 
 export async function GET(_request: Request) {
   try {
-    const data = runPythonScript('promotions_manager.py', ['--list']);
-    return NextResponse.json(data || { promotions: [], logs: [], chats: [], total_gcs: 0 });
+    const data = await runPythonScript('promotions_manager.py', ['--list']);
+    if (!data) throw new Error('Promotions manager returned no data.');
+    return NextResponse.json(data);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to load promotions';
     console.error('Failed to load promotions:', err);
@@ -35,7 +36,7 @@ export async function POST(req: Request) {
         repeat_interval: schedule_type === 'recurring' ? repeat_interval : 'none',
       });
 
-      const res = runPythonScript('promotions_manager.py', ['--add'], payload);
+      const res = await runPythonScript('promotions_manager.py', ['--add'], payload);
       return NextResponse.json(res);
     } else if (action === 'edit') {
       const { id, title, message, link_url, button_text, target_type, target_chat_ids, schedule_type, scheduled_time, repeat_interval, status } = body;
@@ -57,22 +58,22 @@ export async function POST(req: Request) {
         status: status || 'active',
       });
 
-      const res = runPythonScript('promotions_manager.py', ['--edit', String(id)], payload);
+      const res = await runPythonScript('promotions_manager.py', ['--edit', String(id)], payload);
       return NextResponse.json(res);
     } else if (action === 'delete') {
       const { id } = body;
       if (!id) return NextResponse.json({ error: 'Missing promotion ID' }, { status: 400 });
-      const res = runPythonScript('promotions_manager.py', ['--delete', String(id)]);
+      const res = await runPythonScript('promotions_manager.py', ['--delete', String(id)]);
       return NextResponse.json(res);
     } else if (action === 'toggle') {
       const { id, status } = body;
       if (!id || !status) return NextResponse.json({ error: 'Missing ID or status' }, { status: 400 });
-      const res = runPythonScript('promotions_manager.py', ['--toggle', String(id), String(status)]);
+      const res = await runPythonScript('promotions_manager.py', ['--toggle', String(id), String(status)]);
       return NextResponse.json(res);
     } else if (action === 'broadcast' || action === 'send_now') {
       const { id } = body;
       if (!id) return NextResponse.json({ error: 'Missing promotion ID' }, { status: 400 });
-      const res = runPythonScript('promotions_manager.py', ['--broadcast', String(id)]);
+      const res = await runPythonScript('promotions_manager.py', ['--broadcast', String(id)]);
       return NextResponse.json(res);
     }
 

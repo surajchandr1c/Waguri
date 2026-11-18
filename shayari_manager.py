@@ -10,7 +10,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from database import get_db, get_next_sequence, get_db_path
+from database import claim_scheduled_job, get_db, get_next_sequence, get_db_path, release_scheduled_job
+
+_tables_initialized = False
 
 def get_bot_token():
     return os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
@@ -110,6 +112,9 @@ DEFAULT_SEEDS = [
 ]
 
 def init_tables():
+    global _tables_initialized
+    if _tables_initialized:
+        return
     db = get_db()
     db["shayari_content"].create_index("id", unique=True)
     db["shayari_content"].create_index("category")
@@ -134,6 +139,7 @@ def init_tables():
                 "created_at": now_iso,
                 "updated_at": now_iso,
             })
+    _tables_initialized = True
 
 def parse_interval_to_timedelta(interval: str) -> timedelta:
     if not interval or interval == "none":
@@ -394,31 +400,36 @@ def process_due_shayari():
             if (now - last_sent_dt).total_seconds() < min_cooldown_seconds:
                 continue
 
-        res = broadcast_scheduled_shayari(item["id"])
-        results.append({"id": item["id"], "result": res})
+        lease_id = claim_scheduled_job("scheduled_shayari", item["id"], item.get("scheduled_time"))
+        if not lease_id:
+            continue
 
-        # Recurrence handling
-        if item.get("schedule_type") == "recurring":
-            next_time_str = (datetime.now() + interval_delta).strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            res = broadcast_scheduled_shayari(item["id"])
+            results.append({"id": item["id"], "result": res})
+
+            update_fields = {"updated_at": datetime.now().isoformat()}
+            if item.get("schedule_type") == "recurring":
+                update_fields["scheduled_time"] = (
+                    datetime.now() + interval_delta
+                ).strftime("%Y-%m-%dT%H:%M:%S")
+            else:
+                update_fields["status"] = "completed"
             db["scheduled_shayari"].update_one(
-                {"id": item["id"]},
-                {"$set": {"scheduled_time": next_time_str, "updated_at": datetime.now().isoformat()}}
+                {"id": item["id"], "dispatch_lease_id": lease_id},
+                {
+                    "$set": update_fields,
+                    "$unset": {"dispatch_lease_id": "", "dispatch_lease_until": ""},
+                },
             )
-        else:
-            db["scheduled_shayari"].update_one(
-                {"id": item["id"]},
-                {"$set": {"status": "completed", "updated_at": datetime.now().isoformat()}}
-            )
+        except Exception:
+            release_scheduled_job("scheduled_shayari", item["id"], lease_id)
+            raise
 
     return results
 
 def list_all():
     init_tables()
-    try:
-        process_due_shayari()
-    except Exception:
-        pass
-
     db = get_db()
     content_list = []
     for doc in db["shayari_content"].find().sort("id", -1):

@@ -1,13 +1,5 @@
 import { MongoClient, Db, Collection } from 'mongodb';
 import bcrypt from 'bcryptjs';
-import dns from 'node:dns';
-
-// Ensure DNS resolvers handle MongoDB SRV records reliably on Windows/Node.js
-try {
-  dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
-} catch {
-  // Ignore in environments where setServers is restricted
-}
 
 export interface AdminDocument {
   _id?: import('mongodb').ObjectId | string;
@@ -73,37 +65,44 @@ export async function getAdminCollection(): Promise<Collection<AdminDocument>> {
   const collection = db.collection<AdminDocument>('admins');
 
   if (!adminProvisioned) {
-    try {
-      // Ensure unique index on email
-      await collection.createIndex({ email: 1 }, { unique: true });
+    await collection.createIndex({ email: 1 }, { unique: true });
 
-      // Check if any admin account exists
-      const adminCount = await collection.countDocuments();
-      if (adminCount === 0) {
-        const defaultEmail = (process.env.ADMIN_EMAIL || 'admin@waguri.bot').toLowerCase().trim();
-        let passwordHash = process.env.ADMIN_PASSWORD_HASH;
+    const adminCount = await collection.countDocuments();
+    if (adminCount === 0) {
+      const defaultEmail = process.env.ADMIN_EMAIL?.toLowerCase().trim();
+      const rawPassword = process.env.ADMIN_PASSWORD;
+      let passwordHash = process.env.ADMIN_PASSWORD_HASH;
 
-        if (!passwordHash) {
-          const rawPassword = process.env.ADMIN_PASSWORD || 'WaguriAdmin@2026!';
-          passwordHash = await bcrypt.hash(rawPassword, 12);
-        }
-
-        const now = new Date().toISOString();
-        await collection.insertOne({
-          email: defaultEmail,
-          passwordHash,
-          role: 'admin',
-          isActive: true,
-          createdAt: now,
-          updatedAt: now,
-        });
-
-        console.info(`[Auth] Initial admin account provisioned: ${defaultEmail}`);
+      if (!defaultEmail || (!passwordHash && !rawPassword)) {
+        throw new Error(
+          'Configure ADMIN_EMAIL and either ADMIN_PASSWORD or ADMIN_PASSWORD_HASH before initializing the first admin.'
+        );
       }
-      adminProvisioned = true;
-    } catch (err) {
-      console.warn('[Auth] Note during admin collection initialization:', err);
+
+      if (passwordHash && !/^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/.test(passwordHash)) {
+        throw new Error('ADMIN_PASSWORD_HASH must be a valid bcrypt hash.');
+      }
+
+      if (!passwordHash) {
+        if (!rawPassword) {
+          throw new Error('ADMIN_PASSWORD is required when ADMIN_PASSWORD_HASH is not configured.');
+        }
+        passwordHash = await bcrypt.hash(rawPassword, 12);
+      }
+
+      const now = new Date().toISOString();
+      await collection.insertOne({
+        email: defaultEmail,
+        passwordHash,
+        role: 'admin',
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      console.info('[Auth] Initial admin account provisioned.');
     }
+    adminProvisioned = true;
   }
 
   return collection;

@@ -1,10 +1,5 @@
 import { SignJWT, jwtVerify } from 'jose';
-
-const JWT_SECRET_STRING =
-  process.env.JWT_SECRET ||
-  '5e277554b9ad109c9c4471543c0e7585c9abce475c62303c225a190da26297fc';
-
-const secretKey = new TextEncoder().encode(JWT_SECRET_STRING);
+import { jwtSecretKey } from './jwtSecret';
 
 export const AUTH_COOKIE_NAME = 'waguri_admin_token';
 
@@ -23,7 +18,7 @@ export async function signAdminToken(payload: AdminSessionPayload): Promise<stri
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime(expiresIn)
-    .sign(secretKey);
+    .sign(jwtSecretKey);
 }
 
 /**
@@ -31,7 +26,7 @@ export async function signAdminToken(payload: AdminSessionPayload): Promise<stri
  */
 export async function verifyAdminToken(token: string): Promise<AdminSessionPayload | null> {
   try {
-    const { payload } = await jwtVerify(token, secretKey);
+    const { payload } = await jwtVerify(token, jwtSecretKey);
     if (!payload || !payload.email || !payload.userId) {
       return null;
     }

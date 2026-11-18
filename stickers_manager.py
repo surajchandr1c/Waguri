@@ -10,19 +10,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from database import get_db, get_next_sequence, get_db_path
+from database import claim_scheduled_job, get_db, get_next_sequence, get_db_path, release_scheduled_job
 
 _STICKER_PACK_CACHE: dict[str, tuple[float, list[str]]] = {}
+_tables_initialized = False
 
 def get_bot_token():
     return os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN")
 
 def init_tables():
+    global _tables_initialized
+    if _tables_initialized:
+        return
     db = get_db()
     db["scheduled_stickers"].create_index("id", unique=True)
     db["scheduled_stickers"].create_index("status")
     db["sticker_send_logs"].create_index("id", unique=True)
     db["sticker_send_logs"].create_index("scheduled_id")
+    _tables_initialized = True
 
 def parse_interval_to_timedelta(interval: str) -> timedelta:
     if not interval:
@@ -313,28 +318,33 @@ def process_due_stickers():
             if elapsed_seconds < min_cooldown_seconds:
                 continue
 
-        # Send sticker now
-        send_res = send_now(item["id"])
-        results.append({"id": item["id"], "result": send_res})
+        lease_id = claim_scheduled_job("scheduled_stickers", item["id"], item.get("scheduled_time"))
+        if not lease_id:
+            continue
 
-        # Calculate exact next send time
-        next_dt = datetime.now() + interval_delta
-        next_dt_str = next_dt.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            send_res = send_now(item["id"])
+            results.append({"id": item["id"], "result": send_res})
 
-        db["scheduled_stickers"].update_one(
-            {"id": item["id"]},
-            {"$set": {"scheduled_time": next_dt_str, "updated_at": datetime.now().isoformat()}}
-        )
+            next_dt_str = (datetime.now() + interval_delta).strftime("%Y-%m-%dT%H:%M:%S")
+            db["scheduled_stickers"].update_one(
+                {"id": item["id"], "dispatch_lease_id": lease_id},
+                {
+                    "$set": {
+                        "scheduled_time": next_dt_str,
+                        "updated_at": datetime.now().isoformat(),
+                    },
+                    "$unset": {"dispatch_lease_id": "", "dispatch_lease_until": ""},
+                },
+            )
+        except Exception:
+            release_scheduled_job("scheduled_stickers", item["id"], lease_id)
+            raise
 
     return results
 
 def list_all():
     init_tables()
-    try:
-        process_due_stickers()
-    except Exception:
-        pass
-
     db = get_db()
     stickers = []
     for doc in db["scheduled_stickers"].find().sort("id", -1):

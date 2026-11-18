@@ -10,20 +10,17 @@ def fetch_all():
 
     # Query all active collections
     def get_docs(collection_name, filter_q=None, sort_field=None, sort_dir=-1, limit=0):
-        try:
-            cur = db[collection_name].find(filter_q or {})
-            if sort_field:
-                cur = cur.sort(sort_field, sort_dir)
-            if limit > 0:
-                cur = cur.limit(limit)
-            results = []
-            for doc in cur:
-                d = dict(doc)
-                d.pop("_id", None)
-                results.append(d)
-            return results
-        except Exception:
-            return []
+        cur = db[collection_name].find(filter_q or {})
+        if sort_field:
+            cur = cur.sort(sort_field, sort_dir)
+        if limit > 0:
+            cur = cur.limit(limit)
+        results = []
+        for doc in cur:
+            d = dict(doc)
+            d.pop("_id", None)
+            results.append(d)
+        return results
 
     # STRICT FILTERING: Only return active users, channels, and group chats
     business_connections = get_docs("business_connections", {"is_enabled": 1})
@@ -61,10 +58,7 @@ def fetch_all():
     ]
     table_counts = {}
     for col_name in collection_names:
-        try:
-            table_counts[col_name] = db[col_name].count_documents({})
-        except Exception:
-            table_counts[col_name] = 0
+        table_counts[col_name] = db[col_name].count_documents({})
 
     unique_user_ids = {bc["user_id"] for bc in business_connections if bc.get("is_enabled")}
 
@@ -83,9 +77,7 @@ def fetch_all():
     data = {
         "db_info": {
             "path": get_db_path(),
-            "size_kb": 512,
             "modified_time": time.time(),
-            "wal_mode": True,
             "engine": "MongoDB Atlas",
         },
         "table_counts": table_counts,

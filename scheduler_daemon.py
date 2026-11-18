@@ -1,5 +1,6 @@
 import time
 import logging
+from threading import Event
 from stickers_manager import process_due_stickers
 from promotions_manager import process_due_promotions
 from shayari_manager import process_due_shayari
@@ -10,9 +11,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("Waguri.SchedulerDaemon")
 
-def run_scheduler_loop():
+def run_scheduler_loop(stop_event: Event | None = None) -> None:
     logger.info("Waguri dedicated scheduler daemon started. Checking due schedules every 5 seconds.")
-    while True:
+    while stop_event is None or not stop_event.is_set():
         try:
             res_stickers = process_due_stickers()
             if res_stickers:
@@ -34,7 +35,10 @@ def run_scheduler_loop():
         except Exception as e:
             logger.warning("Error processing due shayari: %s", e)
 
-        time.sleep(5)
+        if stop_event is None:
+            time.sleep(5)
+        elif stop_event.wait(5):
+            break
 
 if __name__ == "__main__":
     run_scheduler_loop()

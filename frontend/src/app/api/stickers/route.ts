@@ -3,8 +3,9 @@ import { runPythonScript } from '@/lib/pythonBridge';
 
 export async function GET(_request: Request) {
   try {
-    const data = runPythonScript('stickers_manager.py', ['--list']);
-    return NextResponse.json(data || { scheduled_stickers: [], logs: [], chats: [] });
+    const data = await runPythonScript('stickers_manager.py', ['--list']);
+    if (!data) throw new Error('Sticker manager returned no data.');
+    return NextResponse.json(data);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to load stickers';
     console.error('Failed to load stickers:', err);
@@ -35,7 +36,7 @@ export async function POST(req: Request) {
         chat_title: chat_title || '',
       });
 
-      const res = runPythonScript('stickers_manager.py', ['--add'], payload);
+      const res = await runPythonScript('stickers_manager.py', ['--add'], payload);
       return NextResponse.json(res);
     } else if (action === 'edit') {
       const { id, chat_id, sticker_url, scheduled_time, sticker_name, schedule_type, repeat_interval, chat_title, target_type, target_chat_ids, status } = body;
@@ -57,22 +58,22 @@ export async function POST(req: Request) {
         status: status || 'active',
       });
 
-      const res = runPythonScript('stickers_manager.py', ['--edit', String(id)], payload);
+      const res = await runPythonScript('stickers_manager.py', ['--edit', String(id)], payload);
       return NextResponse.json(res);
     } else if (action === 'delete') {
       const { id } = body;
       if (!id) return NextResponse.json({ error: 'Missing sticker ID' }, { status: 400 });
-      const res = runPythonScript('stickers_manager.py', ['--delete', String(id)]);
+      const res = await runPythonScript('stickers_manager.py', ['--delete', String(id)]);
       return NextResponse.json(res);
     } else if (action === 'toggle') {
       const { id, status } = body;
       if (!id || !status) return NextResponse.json({ error: 'Missing ID or status' }, { status: 400 });
-      const res = runPythonScript('stickers_manager.py', ['--toggle', String(id), String(status)]);
+      const res = await runPythonScript('stickers_manager.py', ['--toggle', String(id), String(status)]);
       return NextResponse.json(res);
     } else if (action === 'send_now') {
       const { id } = body;
       if (!id) return NextResponse.json({ error: 'Missing sticker ID' }, { status: 400 });
-      const res = runPythonScript('stickers_manager.py', ['--send-now', String(id)]);
+      const res = await runPythonScript('stickers_manager.py', ['--send-now', String(id)]);
       return NextResponse.json(res);
     }
 

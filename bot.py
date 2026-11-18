@@ -1,6 +1,5 @@
 import sys
 import threading
-import time
 from telegram import Update
 from telegram.error import Conflict, InvalidToken, NetworkError, TimedOut
 from telegram.ext import ApplicationBuilder
@@ -19,6 +18,7 @@ from config import (
     validate_token,
 )
 from database import init_db
+from scheduler_daemon import run_scheduler_loop
 from handlers import (
     about_command,
     abuse_command,
@@ -203,38 +203,11 @@ def main() -> None:
         # Register all features (commands, admin commands, anti-link, anti-spam, media, raid, error handling)
         register_all_handlers(application)
 
-        # Start silent background scheduler thread for frontend-configured due promotions, stickers, and shayari
-        def schedule_worker():
-            time.sleep(3)  # initial delay
-            logger.info("Silent background schedule worker thread started (polling due schedules every 5s).")
-            while True:
-                try:
-                    from promotions_manager import process_due_promotions
-                    res_p = process_due_promotions()
-                    if res_p:
-                        logger.info("Dispatched due promotions: %s", res_p)
-                except Exception as e:
-                    logger.warning("Background promotion check error: %s", e)
-
-                try:
-                    from stickers_manager import process_due_stickers
-                    res_s = process_due_stickers()
-                    if res_s:
-                        logger.info("Dispatched due stickers: %s", res_s)
-                except Exception as e:
-                    logger.warning("Background sticker check error: %s", e)
-
-                try:
-                    from shayari_manager import process_due_shayari
-                    res_sh = process_due_shayari()
-                    if res_sh:
-                        logger.info("Dispatched due shayari: %s", res_sh)
-                except Exception as e:
-                    logger.warning("Background shayari check error: %s", e)
-
-                time.sleep(5)
-
-        sched_thread = threading.Thread(target=schedule_worker, daemon=True)
+        sched_thread = threading.Thread(
+            target=run_scheduler_loop,
+            name="waguri-scheduler",
+            daemon=True,
+        )
         sched_thread.start()
 
         # Run the bot in polling mode with bootstrap retries, drop_pending_updates, and all update types

@@ -1,11 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { jwtVerify } from 'jose';
-
-const JWT_SECRET_STRING =
-  process.env.JWT_SECRET ||
-  '5e277554b9ad109c9c4471543c0e7585c9abce475c62303c225a190da26297fc';
-
-const secretKey = new TextEncoder().encode(JWT_SECRET_STRING);
+import { verifyAdminToken } from './lib/auth';
 const AUTH_COOKIE_NAME = 'waguri_admin_token';
 
 export async function middleware(request: NextRequest) {
@@ -17,10 +11,7 @@ export async function middleware(request: NextRequest) {
 
   if (token) {
     try {
-      const { payload } = await jwtVerify(token, secretKey);
-      if (payload && payload.email) {
-        isAuthenticated = true;
-      }
+      isAuthenticated = Boolean(await verifyAdminToken(token));
     } catch {
       isAuthenticated = false;
     }

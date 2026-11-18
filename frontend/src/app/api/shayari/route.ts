@@ -3,8 +3,9 @@ import { runPythonScript } from '@/lib/pythonBridge';
 
 export async function GET(_request: Request) {
   try {
-    const data = runPythonScript('shayari_manager.py', ['--list']);
-    return NextResponse.json(data || { items: [], scheduled_shayari: [], logs: [], total_count: 0, category_counts: {}, chats: [] });
+    const data = await runPythonScript('shayari_manager.py', ['--list']);
+    if (!data) throw new Error('Shayari manager returned no data.');
+    return NextResponse.json(data);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Failed to load content';
     console.error('Failed to load shayari content:', err);
@@ -32,7 +33,7 @@ export async function POST(req: Request) {
         tags: tags ? String(tags).trim() : '',
       });
 
-      const res = runPythonScript('shayari_manager.py', ['--add'], payload);
+      const res = await runPythonScript('shayari_manager.py', ['--add'], payload);
       return NextResponse.json(res);
     } else if (action === 'edit_item') {
       const { id, category, content, author, language, media_url, tags } = body;
@@ -50,18 +51,18 @@ export async function POST(req: Request) {
         tags: tags ? String(tags).trim() : '',
       });
 
-      const res = runPythonScript('shayari_manager.py', ['--edit-item', String(id)], payload);
+      const res = await runPythonScript('shayari_manager.py', ['--edit-item', String(id)], payload);
       return NextResponse.json(res);
     } else if (action === 'delete') {
       const { id } = body;
       if (!id) return NextResponse.json({ error: 'Missing content ID' }, { status: 400 });
-      const res = runPythonScript('shayari_manager.py', ['--delete', String(id)]);
+      const res = await runPythonScript('shayari_manager.py', ['--delete', String(id)]);
       return NextResponse.json(res);
     } else if (action === 'broadcast' || action === 'send_now') {
       const { id, chat_id } = body;
       if (!id) return NextResponse.json({ error: 'Missing content ID' }, { status: 400 });
       const target = chat_id ? String(chat_id) : 'all_gc';
-      const res = runPythonScript('shayari_manager.py', ['--broadcast', String(id), target]);
+      const res = await runPythonScript('shayari_manager.py', ['--broadcast', String(id), target]);
       return NextResponse.json(res);
     } else if (action === 'add_schedule') {
       const { title, category, content_id, custom_text, target_type, target_chat_ids, schedule_type, scheduled_time, repeat_interval } = body;
@@ -78,7 +79,7 @@ export async function POST(req: Request) {
         repeat_interval: schedule_type === 'recurring' ? repeat_interval : 'none',
       });
 
-      const res = runPythonScript('shayari_manager.py', ['--add-schedule'], payload);
+      const res = await runPythonScript('shayari_manager.py', ['--add-schedule'], payload);
       return NextResponse.json(res);
     } else if (action === 'edit_schedule') {
       const { id, title, category, content_id, custom_text, target_type, target_chat_ids, schedule_type, scheduled_time, repeat_interval, status } = body;
@@ -97,22 +98,22 @@ export async function POST(req: Request) {
         status: status || 'active',
       });
 
-      const res = runPythonScript('shayari_manager.py', ['--edit-schedule', String(id)], payload);
+      const res = await runPythonScript('shayari_manager.py', ['--edit-schedule', String(id)], payload);
       return NextResponse.json(res);
     } else if (action === 'delete_schedule') {
       const { id } = body;
       if (!id) return NextResponse.json({ error: 'Missing schedule ID' }, { status: 400 });
-      const res = runPythonScript('shayari_manager.py', ['--delete-schedule', String(id)]);
+      const res = await runPythonScript('shayari_manager.py', ['--delete-schedule', String(id)]);
       return NextResponse.json(res);
     } else if (action === 'toggle_schedule') {
       const { id, status } = body;
       if (!id || !status) return NextResponse.json({ error: 'Missing ID or status' }, { status: 400 });
-      const res = runPythonScript('shayari_manager.py', ['--toggle-schedule', String(id), String(status)]);
+      const res = await runPythonScript('shayari_manager.py', ['--toggle-schedule', String(id), String(status)]);
       return NextResponse.json(res);
     } else if (action === 'broadcast_schedule' || action === 'send_schedule_now') {
       const { id } = body;
       if (!id) return NextResponse.json({ error: 'Missing schedule ID' }, { status: 400 });
-      const res = runPythonScript('shayari_manager.py', ['--broadcast-schedule', String(id)]);
+      const res = await runPythonScript('shayari_manager.py', ['--broadcast-schedule', String(id)]);
       return NextResponse.json(res);
     }
 

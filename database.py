@@ -1,8 +1,10 @@
 import json
 import logging
 import os
+import threading
 import time
 from typing import Any
+from uuid import uuid4
 from pymongo import MongoClient, ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 import config
@@ -20,42 +22,6 @@ def get_db_path() -> str:
     """Retrieve the current database description dynamically from configuration."""
     db_name = getattr(config, "MONGODB_DB_NAME", "waguri_db")
     return f"MongoDB Atlas ({db_name})"
-
-
-class MongoConnectionContext:
-    """Compatibility wrapper that supports both direct collection access and context manager protocol."""
-
-    def __init__(self, db: Any):
-        self._db = db
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
-
-    def execute(self, sql: str, *args, **kwargs):
-        """Compatibility helper for legacy test scripts that call execute on connection."""
-        sql_clean = sql.strip().upper()
-        if sql_clean.startswith("DELETE FROM"):
-            parts = sql.strip().split()
-            if len(parts) >= 3:
-                table_name = parts[2].strip("`\"';")
-                try:
-                    self._db[table_name].delete_many({})
-                except Exception:
-                    pass
-        return self
-
-    def commit(self):
-        """No-op commit for database compatibility."""
-        pass
-
-    def __getitem__(self, name: str):
-        return self._db[name]
-
-    def __getattr__(self, name: str):
-        return getattr(self._db, name)
 
 
 def get_client() -> MongoClient:
@@ -93,11 +59,6 @@ def get_db(db_name: str | None = None):
     return client[target_name]
 
 
-def get_connection(db_path: str | None = None):
-    """Compatibility helper returning the active MongoDB database instance wrapped with context manager support."""
-    return MongoConnectionContext(get_db())
-
-
 def get_next_sequence(sequence_name: str, db=None) -> int:
     """Generate an atomic sequential integer ID for collections needing incrementing IDs."""
     target_db = db if db is not None else get_db()
@@ -131,6 +92,7 @@ def init_db(db_path: str | None = None) -> None:
 
     # 4. Moderation Logs collection
     db["chat_moderation_logs"].create_index([("chat_id", ASCENDING), ("timestamp", DESCENDING)])
+    db["chat_moderation_logs"].create_index([("timestamp", DESCENDING)])
 
     # 5. Warnings collection
     db["chat_warnings"].create_index([("chat_id", ASCENDING), ("user_id", ASCENDING)])
@@ -174,6 +136,9 @@ def init_db(db_path: str | None = None) -> None:
 
     # 18. Business Reply Delivery Logs collection
     db["business_reply_logs"].create_index([("business_user_id", ASCENDING), ("sent_at", DESCENDING)])
+    db["business_reply_logs"].create_index(
+        [("business_user_id", ASCENDING), ("status", ASCENDING), ("sent_at", DESCENDING)]
+    )
 
     # 19. Admins (Web Dashboard Authentication) collection
     db["admins"].create_index([("email", ASCENDING)], unique=True)
@@ -250,6 +215,7 @@ def register_or_update_chat(
         {"$setOnInsert": default_settings},
         upsert=True,
     )
+    invalidate_group_settings_cache(chat_id)
 
 
 def set_chat_active(chat_id: int, is_active: bool, db_path: str | None = None) -> None:
@@ -261,13 +227,36 @@ def set_chat_active(chat_id: int, is_active: bool, db_path: str | None = None) -
         {"chat_id": chat_id},
         {"$set": {"is_active": active_int, "updated_at": now}},
     )
+    invalidate_group_settings_cache(chat_id)
+
+
+# High-performance in-memory cache for group settings
+_settings_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+_settings_lock = threading.Lock()
+SETTINGS_CACHE_TTL: float = 120.0  # 2 minutes TTL for group settings
+
+
+def invalidate_group_settings_cache(chat_id: int | None = None) -> None:
+    """Invalidate cached settings for a group or all groups."""
+    with _settings_lock:
+        if chat_id is None:
+            _settings_cache.clear()
+        else:
+            _settings_cache.pop(chat_id, None)
 
 
 def get_group_settings(chat_id: int, db_path: str | None = None) -> dict[str, Any]:
     """
     Retrieve comprehensive per-group or per-channel settings.
     If the chat has no stored configuration, initializes default settings seamlessly.
+    Uses in-memory cache with immediate invalidation to achieve sub-millisecond responses in GC.
     """
+    now = time.time()
+    with _settings_lock:
+        cached = _settings_cache.get(chat_id)
+        if cached and (now - cached[0] < SETTINGS_CACHE_TTL):
+            return cached[1].copy()
+
     db = get_db()
     s_doc = db["chat_settings"].find_one({"chat_id": chat_id})
     c_doc = db["chats"].find_one({"chat_id": chat_id})
@@ -289,7 +278,7 @@ def get_group_settings(chat_id: int, db_path: str | None = None) -> dict[str, An
         added_at = c_doc.get("added_at") if c_doc else 0.0
         is_active = bool(c_doc.get("is_active", 1)) if c_doc else True
 
-        return {
+        result = {
             "chat_id": chat_id,
             "chat_title": chat_title or "Unnamed Chat",
             "chat_type": chat_type or "group",
@@ -337,6 +326,9 @@ def get_group_settings(chat_id: int, db_path: str | None = None) -> dict[str, An
             "is_active": is_active,
             "updated_at": float(s_doc.get("updated_at") or 0.0),
         }
+        with _settings_lock:
+            _settings_cache[chat_id] = (now, result)
+        return result.copy()
 
     # If document does not exist yet, register and return default config
     register_or_update_chat(chat_id, None, None, is_active=True)
@@ -384,6 +376,7 @@ def update_group_feature(chat_id: int, feature_col: str, enabled: bool, db_path:
         {"chat_id": chat_id},
         {"$set": {feature_col: val, "updated_at": now}},
     )
+    invalidate_group_settings_cache(chat_id)
 
 
 def update_group_numeric_setting(chat_id: int, setting_col: str, value: int, db_path: str | None = None) -> None:
@@ -412,6 +405,7 @@ def update_group_numeric_setting(chat_id: int, setting_col: str, value: int, db_
         {"chat_id": chat_id},
         {"$set": {setting_col: int(value), "updated_at": now}},
     )
+    invalidate_group_settings_cache(chat_id)
 
 
 def update_group_text_setting(chat_id: int, setting_col: str, value: str | None, db_path: str | None = None) -> None:
@@ -435,6 +429,7 @@ def update_group_text_setting(chat_id: int, setting_col: str, value: str | None,
         {"chat_id": chat_id},
         {"$set": {setting_col: value, "updated_at": now}},
     )
+    invalidate_group_settings_cache(chat_id)
 
 
 def set_group_anti_link(chat_id: int, enabled: bool, db_path: str | None = None) -> None:
@@ -1530,66 +1525,77 @@ def check_and_claim_cooldown_reply(
     """
     db = get_db()
     now = time.time()
-    doc = db["business_first_contacts"].find_one(
-        {"business_user_id": business_user_id, "sender_id": sender_id}
-    )
+    contacts = db["business_first_contacts"]
+    identity = {"business_user_id": business_user_id, "sender_id": sender_id}
+    fields: dict[str, Any] = {"last_seen_at": now}
+    if sender_username:
+        fields["sender_username"] = sender_username
+    if sender_first_name:
+        fields["sender_first_name"] = sender_first_name
 
-    if not doc:
-        try:
-            db["business_first_contacts"].insert_one(
-                {
-                    "business_user_id": business_user_id,
-                    "sender_id": sender_id,
-                    "sender_username": sender_username,
-                    "sender_first_name": sender_first_name,
-                    "first_seen_at": now,
-                    "last_seen_at": now,
-                    "messages_count": 1,
-                    "replied": 1,
-                    "replied_at": now,
-                }
-            )
-            return True
-        except DuplicateKeyError:
-            doc = db["business_first_contacts"].find_one(
-                {"business_user_id": business_user_id, "sender_id": sender_id}
-            )
-
-    replied_at = float(doc.get("replied_at") or 0.0) if doc else 0.0
-    if (now - replied_at) >= cooldown_seconds:
-        update_doc: dict[str, Any] = {
-            "$set": {
-                "last_seen_at": now,
-                "replied": 1,
-                "replied_at": now,
+    try:
+        claimed = contacts.find_one_and_update(
+            {
+                **identity,
+                "$or": [
+                    {"replied_at": {"$lte": now - cooldown_seconds}},
+                    {"replied_at": {"$exists": False}},
+                    {"replied_at": None},
+                ],
             },
-            "$inc": {"messages_count": 1},
-        }
-        if sender_username:
-            update_doc["$set"]["sender_username"] = sender_username
-        if sender_first_name:
-            update_doc["$set"]["sender_first_name"] = sender_first_name
-
-        db["business_first_contacts"].update_one(
-            {"business_user_id": business_user_id, "sender_id": sender_id},
-            update_doc,
+            {
+                "$set": {**fields, "replied": 1, "replied_at": now},
+                "$setOnInsert": {**identity, "first_seen_at": now},
+                "$inc": {"messages_count": 1},
+            },
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
         )
-        return True
-    else:
-        update_doc = {
-            "$set": {"last_seen_at": now},
-            "$inc": {"messages_count": 1},
-        }
-        if sender_username:
-            update_doc["$set"]["sender_username"] = sender_username
-        if sender_first_name:
-            update_doc["$set"]["sender_first_name"] = sender_first_name
-
-        db["business_first_contacts"].update_one(
-            {"business_user_id": business_user_id, "sender_id": sender_id},
-            update_doc,
+        return claimed is not None
+    except DuplicateKeyError:
+        contacts.update_one(
+            identity,
+            {"$set": fields, "$inc": {"messages_count": 1}},
         )
         return False
+
+
+def claim_scheduled_job(
+    collection_name: str,
+    item_id: int,
+    scheduled_time: str | None,
+    lease_seconds: int = 300,
+) -> str | None:
+    """Atomically lease a due item so parallel scheduler workers cannot dispatch it."""
+    now = time.time()
+    lease_id = uuid4().hex
+    claimed = get_db()[collection_name].find_one_and_update(
+        {
+            "id": item_id,
+            "status": "active",
+            "scheduled_time": scheduled_time,
+            "$or": [
+                {"dispatch_lease_until": {"$exists": False}},
+                {"dispatch_lease_until": {"$lte": now}},
+            ],
+        },
+        {
+            "$set": {
+                "dispatch_lease_id": lease_id,
+                "dispatch_lease_until": now + lease_seconds,
+            }
+        },
+        return_document=ReturnDocument.AFTER,
+    )
+    return lease_id if claimed else None
+
+
+def release_scheduled_job(collection_name: str, item_id: int, lease_id: str) -> None:
+    """Release a scheduled-item lease only when it is still owned by this worker."""
+    get_db()[collection_name].update_one(
+        {"id": item_id, "dispatch_lease_id": lease_id},
+        {"$unset": {"dispatch_lease_id": "", "dispatch_lease_until": ""}},
+    )
 
 
 def has_replied_to_sender(business_user_id: int, sender_id: int, db_path: str | None = None) -> bool:

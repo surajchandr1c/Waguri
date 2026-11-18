@@ -1,28 +1,213 @@
 import { NextResponse } from 'next/server';
-import { fetchRawDatabaseData, runPythonScript } from '@/lib/pythonBridge';
+import type { Document } from 'mongodb';
+import { getDb } from '@/lib/mongodb';
+import { runPythonScript } from '@/lib/pythonBridge';
 import { BotUser, BotGroupChat, BotChannel, BotFeatureUsage, UserActivity } from '@/types/user';
 
-export async function GET(_request: Request) {
-  const dbData = fetchRawDatabaseData<Record<string, unknown>>();
+type DbFlag = number | boolean;
 
-  const businessConnections: Record<string, any>[] = (dbData?.business_connections as any[]) || [];
-  const personalSettings: Record<string, any>[] = (dbData?.personal_reply_settings as any[]) || [];
-  const personalTemplates: Record<string, any>[] = (dbData?.personal_reply_templates as any[]) || [];
-  const businessReplyLogs: Record<string, any>[] = (dbData?.business_reply_logs as any[]) || [];
-  const rawChats: Record<string, any>[] = (dbData?.chats as any[]) || [];
-  const chatSettings: Record<string, any>[] = (dbData?.chat_settings as any[]) || [];
-  const chatStatistics: Record<string, any>[] = (dbData?.chat_statistics as any[]) || [];
-  const chatJoinEvents: Record<string, any>[] = (dbData?.chat_join_events as any[]) || [];
-  const chatModerationLogs: Record<string, any>[] = (dbData?.chat_moderation_logs as any[]) || [];
+interface BusinessConnectionRecord extends Document {
+  user_id: number;
+  user_chat_id?: number;
+  is_enabled: DbFlag;
+  can_reply?: DbFlag;
+  connected_at?: number;
+  account_username?: string;
+  account_first_name?: string;
+}
+
+interface ChatRecord extends Document {
+  chat_id: number;
+  is_active: DbFlag;
+  chat_type: string;
+  chat_title?: string;
+  member_count?: number;
+  added_at?: number;
+}
+
+interface PersonalSettingsRecord extends Document {
+  user_id: number;
+  first_time_only?: DbFlag;
+  daily_limit?: number;
+  cooldown_seconds?: number;
+  parse_mode?: string;
+  welcome_message_enabled?: DbFlag;
+}
+
+interface PersonalTemplateRecord extends Document {
+  user_id: number;
+  content?: string;
+  template_name?: string;
+}
+
+interface ChatSettingsRecord extends Document {
+  chat_id: number;
+  abuse_detection_enabled?: DbFlag;
+  abuse_warning_limit?: number;
+  abuse_mute_duration_minutes?: number;
+  abuse_bypass_detection?: DbFlag;
+  anti_link_enabled?: DbFlag;
+  anti_spam_enabled?: DbFlag;
+  flood_threshold_messages?: number;
+  flood_window_seconds?: number;
+  spam_window_seconds?: number;
+  anti_bio_link_enabled?: DbFlag;
+  clean_service_enabled?: DbFlag;
+}
+
+interface ChatStatisticsRecord extends Document {
+  chat_id: number;
+  total_messages_checked?: number;
+  abuse_deleted?: number;
+  links_deleted?: number;
+  spam_deleted?: number;
+  warnings_issued?: number;
+  restrictions_applied?: number;
+}
+
+interface ReplyLogRecord extends Document {
+  id?: number;
+  sent_at?: number;
+  reply_text?: string;
+  status?: string;
+}
+
+interface ReplySummaryRecord extends Document {
+  _id: number;
+  total: number;
+  recent: ReplyLogRecord[];
+}
+
+interface JoinSummaryRecord extends Document {
+  _id: number;
+  count: number;
+}
+
+interface ModerationLogRecord extends Document {
+  id?: number;
+  chat_id: number;
+  timestamp?: number;
+  action?: string;
+  details?: string;
+}
+
+interface ModerationLogSummaryRecord extends Document {
+  _id: number;
+  recent: ModerationLogRecord[];
+}
+
+async function buildUsersResponse() {
+  const db = await getDb();
+  const [businessConnections, rawChats] = await Promise.all([
+    db.collection<BusinessConnectionRecord>('business_connections')
+      .find({ is_enabled: 1 }, { projection: { _id: 0 } })
+      .toArray(),
+    db.collection<ChatRecord>('chats')
+      .find({ is_active: 1 }, { projection: { _id: 0 } })
+      .toArray(),
+  ]);
+  const userIds = businessConnections.map((connection) => connection.user_id);
+  const chatIds = rawChats.map((chat) => chat.chat_id);
+
+  const [
+    personalSettings,
+    personalTemplates,
+    userReplySummaries,
+    chatSettings,
+    chatStatistics,
+    joinSummaries,
+    moderationLogSummaries,
+  ] = await Promise.all([
+    db.collection<PersonalSettingsRecord>('personal_reply_settings')
+      .find({ user_id: { $in: userIds } }, { projection: { _id: 0 } })
+      .toArray(),
+    db.collection<PersonalTemplateRecord>('personal_reply_templates')
+      .find({ user_id: { $in: userIds }, is_active: 1 }, { projection: { _id: 0 } })
+      .toArray(),
+    db.collection<ReplyLogRecord>('business_reply_logs').aggregate<ReplySummaryRecord>([
+      { $match: { business_user_id: { $in: userIds } } },
+      {
+        $group: {
+          _id: '$business_user_id',
+          total: { $sum: 1 },
+          recent: {
+            $topN: {
+              output: {
+                id: '$id',
+                sent_at: '$sent_at',
+                reply_text: '$reply_text',
+                status: '$status',
+              },
+              sortBy: { sent_at: -1 },
+              n: 5,
+            },
+          },
+        },
+      },
+    ]).toArray(),
+    db.collection<ChatSettingsRecord>('chat_settings')
+      .find({ chat_id: { $in: chatIds } }, { projection: { _id: 0 } })
+      .toArray(),
+    db.collection<ChatStatisticsRecord>('chat_statistics')
+      .find({ chat_id: { $in: chatIds } }, { projection: { _id: 0 } })
+      .toArray(),
+    db.collection('chat_join_events').aggregate<JoinSummaryRecord>([
+      { $match: { chat_id: { $in: chatIds } } },
+      { $group: { _id: '$chat_id', count: { $sum: 1 } } },
+    ]).toArray(),
+    db.collection<ModerationLogRecord>('chat_moderation_logs').aggregate<ModerationLogSummaryRecord>([
+      { $match: { chat_id: { $in: chatIds } } },
+      {
+        $group: {
+          _id: '$chat_id',
+          recent: {
+            $topN: {
+              output: {
+                id: '$id',
+                chat_id: '$chat_id',
+                timestamp: '$timestamp',
+                action: '$action',
+                details: '$details',
+              },
+              sortBy: { timestamp: -1 },
+              n: 8,
+            },
+          },
+        },
+      },
+    ]).toArray(),
+  ]);
+
+  const settingsByUser = new Map<number, PersonalSettingsRecord>();
+  const templatesByUser = new Map<number, PersonalTemplateRecord>();
+  const replySummaryByUser = new Map<number, ReplySummaryRecord>();
+  const settingsByChat = new Map<number, ChatSettingsRecord>();
+  const statisticsByChat = new Map<number, ChatStatisticsRecord>();
+  const joinCountByChat = new Map<number, number>();
+  for (const row of personalSettings) settingsByUser.set(row.user_id, row);
+  for (const row of personalTemplates) templatesByUser.set(row.user_id, row);
+  for (const row of userReplySummaries) replySummaryByUser.set(row._id, row);
+  for (const row of chatSettings) settingsByChat.set(row.chat_id, row);
+  for (const row of chatStatistics) statisticsByChat.set(row.chat_id, row);
+  for (const row of joinSummaries) joinCountByChat.set(row._id, row.count);
+  const moderationLogsByChat = new Map(
+    moderationLogSummaries.map((row) => [row._id, row.recent])
+  );
 
   // ONLY USERS WHO ADDED THE BOT ON PERSONAL DIRECT MESSAGES
   const users: BotUser[] = [];
 
   for (const bc of businessConnections) {
     if (!bc.is_enabled) continue;
-    const settings = personalSettings.find((ps) => ps.user_id === bc.user_id) || {};
-    const template = personalTemplates.find((pt) => pt.user_id === bc.user_id) || {};
-    const userReplies = businessReplyLogs.filter((r) => r.business_user_id === bc.user_id);
+    const settings: PersonalSettingsRecord = settingsByUser.get(bc.user_id) ?? {
+      user_id: bc.user_id,
+    };
+    const template: PersonalTemplateRecord = templatesByUser.get(bc.user_id) ?? {
+      user_id: bc.user_id,
+    };
+    const replySummary = replySummaryByUser.get(bc.user_id);
+    const userReplies = replySummary?.recent || [];
+    const totalReplies = replySummary?.total || 0;
 
     const features: BotFeatureUsage[] = [
       {
@@ -56,7 +241,7 @@ export async function GET(_request: Request) {
         description: 'Auto-reply template with dynamic variables.',
         configDetails: {
           'Template Name': template.template_name || 'default',
-          'Content': template.content || 'https://t.me/+jneLoLFT1xs3YWNl',
+          'Content': template.content || 'Standard auto-reply template',
         },
         metrics: [
           { label: 'Template', value: template.template_name || 'default' },
@@ -123,10 +308,10 @@ export async function GET(_request: Request) {
         type: 'business_dm',
       },
       stats: {
-        totalInteractions: userReplies.length,
-        autoRepliesSent: userReplies.length,
+        totalInteractions: totalReplies,
+        autoRepliesSent: totalReplies,
         warningsCount: 0,
-        messagesChecked: userReplies.length,
+        messagesChecked: totalReplies,
         groupsCount: 0,
       },
       featuresUsed: features,
@@ -142,8 +327,12 @@ export async function GET(_request: Request) {
     if (!c.is_active) continue;
 
     const isChannel = c.chat_type === 'channel';
-    const settings = chatSettings.find((s) => s.chat_id === c.chat_id) || {};
-    const statsRow = chatStatistics.find((s) => s.chat_id === c.chat_id) || {};
+    const settings: ChatSettingsRecord = settingsByChat.get(c.chat_id) ?? {
+      chat_id: c.chat_id,
+    };
+    const statsRow: ChatStatisticsRecord = statisticsByChat.get(c.chat_id) ?? {
+      chat_id: c.chat_id,
+    };
 
     if (isChannel) {
       channels.push({
@@ -197,7 +386,8 @@ export async function GET(_request: Request) {
       });
     } else {
       // Group Chat (GC)
-      const groupJoins = chatJoinEvents.filter((j) => j.chat_id === c.chat_id);
+      const groupJoinCount = joinCountByChat.get(c.chat_id) || 0;
+      const groupModerationLogs = moderationLogsByChat.get(c.chat_id) || [];
 
       const gcFeatures: BotFeatureUsage[] = [
         {
@@ -285,7 +475,7 @@ export async function GET(_request: Request) {
         chatId: c.chat_id,
         title: c.chat_title || 'Group Chat',
         type: c.chat_type === 'supergroup' ? 'supergroup' : 'group',
-        memberCount: c.member_count || groupJoins.length || 1,
+        memberCount: c.member_count || groupJoinCount || 1,
         isActive: Boolean(c.is_active),
         avatarGradient: c.chat_type === 'supergroup' ? 'from-indigo-600 via-sky-500 to-blue-600' : 'from-sky-500 to-teal-500',
         addedAt: new Date((c.added_at || Date.now() / 1000) * 1000).toLocaleDateString(),
@@ -298,14 +488,14 @@ export async function GET(_request: Request) {
           warningsIssued: statsRow.warnings_issued || 0,
           usersRestricted: statsRow.restrictions_applied || 0,
         },
-        recentActivity: (chatModerationLogs.filter((m) => m.chat_id === c.chat_id).slice(0, 8).map((m, idx) => ({
+        recentActivity: (groupModerationLogs.map((m, idx) => ({
           id: `act_gc_${c.chat_id}_${m.id || idx}`,
           timestamp: m.timestamp ? new Date(m.timestamp * 1000).toLocaleString() : 'Recent',
           action: m.action || 'Moderation Action',
           category: 'group' as const,
           details: m.details || 'Moderation enforcement performed.',
         }))).concat(
-          chatModerationLogs.filter((m) => m.chat_id === c.chat_id).length === 0
+          groupModerationLogs.length === 0
             ? [{
                 id: `act_gc_${c.chat_id}_1`,
                 timestamp: new Date((c.added_at || Date.now() / 1000) * 1000).toLocaleDateString(),
@@ -332,36 +522,45 @@ export async function GET(_request: Request) {
   });
 }
 
+export async function GET(_request: Request) {
+  try {
+    return await buildUsersResponse();
+  } catch (error) {
+    console.error('Failed to load dashboard users and chats:', error);
+    return NextResponse.json({ error: 'Failed to load users and chats.' }, { status: 500 });
+  }
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
     const action = body.action;
 
     if (action === 'add_chat') {
-      const res = runPythonScript('get_users_data.py', ['--chat-add'], JSON.stringify(body.data || body));
+      const res = await runPythonScript('get_users_data.py', ['--chat-add'], JSON.stringify(body.data || body));
       return NextResponse.json(res);
     } else if (action === 'edit_chat') {
       const id = body.id || body.chat_id;
       if (!id) return NextResponse.json({ error: 'Missing chat id' }, { status: 400 });
-      const res = runPythonScript('get_users_data.py', ['--chat-edit', String(id)], JSON.stringify(body.data || body));
+      const res = await runPythonScript('get_users_data.py', ['--chat-edit', String(id)], JSON.stringify(body.data || body));
       return NextResponse.json(res);
     } else if (action === 'delete_chat') {
       const id = body.id || body.chat_id;
       if (!id) return NextResponse.json({ error: 'Missing chat id' }, { status: 400 });
-      const res = runPythonScript('get_users_data.py', ['--chat-delete', String(id)]);
+      const res = await runPythonScript('get_users_data.py', ['--chat-delete', String(id)]);
       return NextResponse.json(res);
     } else if (action === 'add_user') {
-      const res = runPythonScript('get_users_data.py', ['--user-add'], JSON.stringify(body.data || body));
+      const res = await runPythonScript('get_users_data.py', ['--user-add'], JSON.stringify(body.data || body));
       return NextResponse.json(res);
     } else if (action === 'edit_user') {
       const id = body.id || body.user_id;
       if (!id) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
-      const res = runPythonScript('get_users_data.py', ['--user-edit', String(id)], JSON.stringify(body.data || body));
+      const res = await runPythonScript('get_users_data.py', ['--user-edit', String(id)], JSON.stringify(body.data || body));
       return NextResponse.json(res);
     } else if (action === 'delete_user') {
       const id = body.id || body.user_id;
       if (!id) return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
-      const res = runPythonScript('get_users_data.py', ['--user-delete', String(id)]);
+      const res = await runPythonScript('get_users_data.py', ['--user-delete', String(id)]);
       return NextResponse.json(res);
     }
 
@@ -371,7 +570,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing id or type parameter' }, { status: 400 });
     }
 
-    const res = runPythonScript('get_users_data.py', ['--remove', String(type), String(id)]);
+    const res = await runPythonScript('get_users_data.py', ['--remove', String(type), String(id)]);
     return NextResponse.json(res);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Operation failed';
