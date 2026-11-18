@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { 
   Home, 
   Menu, 
@@ -14,29 +14,13 @@ import {
   Users,
   Sticker,
   Megaphone,
-  Quote,
-  LogOut,
-  Loader2
+  Quote
 } from 'lucide-react';
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [userCount, setUserCount] = useState<number | null>(null);
-  const [loggingOut, setLoggingOut] = useState(false);
-
-  const handleLogout = async () => {
-    setLoggingOut(true);
-    try {
-      await fetch('/api/admin/logout', { method: 'POST' });
-    } catch (err) {
-      console.error('Logout error in sidebar:', err);
-    } finally {
-      router.push('/login');
-      router.refresh();
-    }
-  };
 
   // Close on Escape key press
   useEffect(() => {
@@ -280,26 +264,6 @@ export default function Sidebar() {
               </Link>
             );
           })}
-        </div>
-
-        {/* Admin Session & Sign Out */}
-        <div className="px-4 py-3 border-t border-zinc-800/80 bg-zinc-950/60">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-purple-400">Admin Session</span>
-            <span className="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>
-          </div>
-          <button
-            onClick={handleLogout}
-            disabled={loggingOut}
-            className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-zinc-900 hover:bg-red-950/40 text-zinc-300 hover:text-red-300 border border-zinc-800 hover:border-red-500/30 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
-          >
-            {loggingOut ? (
-              <Loader2 className="w-3.5 h-3.5 animate-spin text-red-400" />
-            ) : (
-              <LogOut className="w-3.5 h-3.5 text-red-400" />
-            )}
-            <span>Sign Out</span>
-          </button>
         </div>
 
         {/* Telegram Direct Link & Footer */}
