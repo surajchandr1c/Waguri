@@ -57,7 +57,7 @@ def fetch_all():
         "business_first_contacts", "business_reply_logs",
         "scheduled_promotions", "promotion_send_logs",
         "shayari_content", "scheduled_shayari", "shayari_send_logs",
-        "scheduled_stickers", "sticker_send_logs"
+        "scheduled_stickers", "sticker_send_logs", "admins"
     ]
     table_counts = {}
     for col_name in collection_names:

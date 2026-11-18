@@ -1,7 +1,7 @@
 'use client';
 
-import React from 'react';
-import { ShieldCheck, Send } from 'lucide-react';
+import React, { useState } from 'react';
+import { ShieldCheck, Send, LogOut, Loader2 } from 'lucide-react';
 
 interface HeaderProps {
   title: string;
@@ -10,6 +10,19 @@ interface HeaderProps {
 }
 
 export default function Header({ title, description, badge }: HeaderProps) {
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await fetch('/api/admin/logout', { method: 'POST' });
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      window.location.href = '/login';
+    }
+  };
+
   return (
     <header className="relative lg:sticky lg:top-0 z-20 bg-zinc-950/90 backdrop-blur-md border-b border-zinc-800/80 px-4 sm:px-8 py-3.5 sm:py-4">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4 max-w-7xl mx-auto">
@@ -29,10 +42,10 @@ export default function Header({ title, description, badge }: HeaderProps) {
           )}
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0 flex-wrap">
           <div className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs text-zinc-300">
-            <ShieldCheck className="w-3.5 h-3.5 text-zinc-400" />
-            <span>MongoDB Atlas</span>
+            <ShieldCheck className="w-3.5 h-3.5 text-purple-400" />
+            <span>Admin Authenticated</span>
           </div>
 
           <a
@@ -44,8 +57,23 @@ export default function Header({ title, description, badge }: HeaderProps) {
             <Send className="w-3 h-3 text-black" />
             <span>Launch Bot</span>
           </a>
+
+          <button
+            onClick={handleLogout}
+            disabled={loggingOut}
+            title="Sign out of Admin Session"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-red-200 text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
+          >
+            {loggingOut ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-red-300" />
+            ) : (
+              <LogOut className="w-3.5 h-3.5 text-red-400" />
+            )}
+            <span className="hidden sm:inline">Logout</span>
+          </button>
         </div>
       </div>
     </header>
   );
 }
+

@@ -147,6 +147,20 @@ SYSTEM_SETTINGS_JSON_SCHEMA = {
     },
 }
 
+ADMINS_JSON_SCHEMA = {
+    "bsonType": "object",
+    "required": ["email", "passwordHash", "role", "isActive"],
+    "properties": {
+        "email": {"bsonType": "string", "description": "Admin email address (unique)"},
+        "passwordHash": {"bsonType": "string", "description": "Bcrypt hashed password"},
+        "role": {"enum": ["admin", "superadmin"], "description": "Admin access role"},
+        "isActive": {"bsonType": "bool", "description": "Account activation status"},
+        "createdAt": {"bsonType": "string", "description": "Creation ISO timestamp"},
+        "updatedAt": {"bsonType": "string", "description": "Last update ISO timestamp"},
+        "lastLoginAt": {"bsonType": ["string", "null"], "description": "Last successful login ISO timestamp"},
+    },
+}
+
 ALL_COLLECTION_SCHEMAS = {
     "scheduled_promotions": PROMOTIONS_JSON_SCHEMA,
     "scheduled_stickers": STICKERS_JSON_SCHEMA,
@@ -154,6 +168,7 @@ ALL_COLLECTION_SCHEMAS = {
     "business_connections": USERS_JSON_SCHEMA,
     "chats": CHATS_JSON_SCHEMA,
     "system_settings": SYSTEM_SETTINGS_JSON_SCHEMA,
+    "admins": ADMINS_JSON_SCHEMA,
 }
 
 

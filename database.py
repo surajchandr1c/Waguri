@@ -125,6 +125,9 @@ def init_db(db_path: str | None = None) -> None:
     # 18. Business Reply Delivery Logs collection
     db["business_reply_logs"].create_index([("business_user_id", ASCENDING), ("sent_at", DESCENDING)])
 
+    # 19. Admins (Web Dashboard Authentication) collection
+    db["admins"].create_index([("email", ASCENDING)], unique=True)
+
     logger.info("MongoDB database initialized and verified for multi-tenant operation at '%s'.", get_db_path())
 
 
