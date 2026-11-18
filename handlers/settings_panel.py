@@ -320,7 +320,7 @@ def build_abuse_words_markup(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
         else:
             text += "<i>None</i>\n"
 
-    text += "\n<i>To manage words, use:</i>\n<code>/abuse addword &lt;word&gt;</code>\n<code>/abuse removeword &lt;word&gt;</code>"
+    text += "\n<i>To manage words, use:</i>\n<code>/abuse addword &lt;word1, word2, ...&gt;</code>\n<code>/abuse removeword &lt;word1, word2, ...&gt;</code>"
     keyboard = [
         [InlineKeyboardButton("⬅️ Back to Abuse Settings", callback_data=f"cfg:{chat_id}:menu_abuse")],
     ]

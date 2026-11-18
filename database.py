@@ -891,7 +891,13 @@ def remove_abuse_custom_keyword(chat_id: int, word: str) -> bool:
     db = get_db()
     now = time.time()
     res = db["chat_settings"].update_one(
-        {"chat_id": chat_id},
+        {
+            "chat_id": chat_id,
+            "$or": [
+                {"abuse_custom_blocked_words": clean_word},
+                {"abuse_custom_allowed_words": clean_word},
+            ],
+        },
         {
             "$pull": {
                 "abuse_custom_blocked_words": clean_word,
