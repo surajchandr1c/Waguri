@@ -15,6 +15,7 @@ _admin_cache: dict[int, tuple[float, set[int], int | None]] = {}
 # In-memory cache for bot permissions:
 # chat_id -> (timestamp, can_delete_messages, can_restrict_members)
 _bot_perm_cache: dict[int, tuple[float, bool, bool]] = {}
+ADMIN_CACHE_MAX_SIZE = 2000
 
 
 def is_bot_owner(user_id: int | None) -> bool:
@@ -31,6 +32,11 @@ async def get_group_admins(chat_id: int, bot) -> tuple[set[int], int | None]:
     Returns (set_of_admin_and_owner_user_ids, owner_user_id).
     """
     now = time.time()
+    if len(_admin_cache) >= ADMIN_CACHE_MAX_SIZE:
+        expired = [cached_id for cached_id, (cached_at, _, _) in _admin_cache.items()
+                   if now - cached_at >= ADMIN_CACHE_TTL_SECONDS]
+        for cached_id in expired[:500]:
+            _admin_cache.pop(cached_id, None)
     if chat_id in _admin_cache:
         cached_time, admin_ids, owner_id = _admin_cache[chat_id]
         if now - cached_time < ADMIN_CACHE_TTL_SECONDS:

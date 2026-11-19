@@ -49,6 +49,7 @@ from database import (
     reset_user_abuse_warnings,
     update_abuse_settings,
     update_group_feature,
+    run_db,
 )
 from handlers.admin_check import check_bot_permissions, is_sender_admin_or_owner
 from moderation.abuse import AbuseAction, get_abuse_detector
@@ -80,6 +81,10 @@ PROCESSED_MSG_TTL = 300.0  # 5 minutes
 def _get_user_lock(chat_id: int, user_id: int) -> asyncio.Lock:
     """Retrieve or initialize concurrency lock for a user in a chat."""
     key = (chat_id, user_id)
+    if len(_user_locks) >= 5000:
+        unlocked = [k for k, lock in _user_locks.items() if not lock.locked()]
+        for k in unlocked[:1000]:
+            _user_locks.pop(k, None)
     if key not in _user_locks:
         _user_locks[key] = asyncio.Lock()
     return _user_locks[key]
@@ -158,7 +163,7 @@ async def handle_abuse_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     # Load group moderation settings
-    settings = get_group_settings(chat.id)
+    settings = await run_db(get_group_settings, chat.id)
     if not settings.get("is_active", True):
         return
 
@@ -179,7 +184,7 @@ async def handle_abuse_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     # Retrieve custom blocked and allowed keywords
-    blocked_words, allowed_words = get_abuse_custom_keywords(chat.id)
+    blocked_words, allowed_words = await run_db(get_abuse_custom_keywords, chat.id)
 
     # 3. Evaluate content through AbuseDetector
     detector = get_abuse_detector()

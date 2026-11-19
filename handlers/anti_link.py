@@ -23,6 +23,7 @@ from database import (
     record_restriction,
     remove_blacklisted_pattern,
     remove_whitelisted_domain,
+    run_db,
 )
 from handlers.admin_check import (
     check_bot_permissions,
@@ -55,6 +56,7 @@ URL_REGEX = re.compile(
 _user_bio_cache: dict[int, tuple[bool, str, float]] = {}
 BIO_CACHE_CLEAN_TTL = 300.0  # 5 minutes for clean bios
 BIO_CACHE_VIOLATION_TTL = 60.0  # 1 minute for users with links (re-checked sooner once removed)
+BIO_CACHE_MAX_SIZE = 2000
 
 
 def invalidate_bio_cache(user_id: int | None = None) -> None:
@@ -73,6 +75,14 @@ async def check_user_bio_link(user_id: int, bot: Application.bot) -> tuple[bool,
     Returns (has_link: bool, url_found: str).
     """
     now = time.time()
+    if len(_user_bio_cache) >= BIO_CACHE_MAX_SIZE:
+        expired = [
+            cached_user_id
+            for cached_user_id, (_, _, cached_at) in _user_bio_cache.items()
+            if now - cached_at >= BIO_CACHE_CLEAN_TTL
+        ]
+        for cached_user_id in expired[:500]:
+            _user_bio_cache.pop(cached_user_id, None)
     cached = _user_bio_cache.get(user_id)
     if cached:
         has_link, url, cached_at = cached
@@ -370,7 +380,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if chat.type not in (ChatType.GROUP, ChatType.SUPERGROUP):
         return
 
-    increment_stat(chat.id, "total_messages_checked", count=1, chat_title=chat.title)
+    await run_db(increment_stat, chat.id, "total_messages_checked", count=1, chat_title=chat.title)
 
     # Check blacklist first
     text_content = (message.text or "") + " " + (message.caption or "")
@@ -390,7 +400,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                     pass
 
     # Check per-group setting
-    settings = get_group_settings(chat.id)
+    settings = await run_db(get_group_settings, chat.id)
     if not settings.get("is_active", True):
         return
 

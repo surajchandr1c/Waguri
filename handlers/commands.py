@@ -28,8 +28,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             from handlers.personal_autoreply import personal_command
             await personal_command(update, context)
             return
-        bot_user = await context.bot.get_me()
-        bot_username = bot_user.username or "Ms_Waguri_bot"
+        bot_username = context.bot.username or "Ms_Waguri_bot"
         text, markup = build_private_start_markup(bot_username)
         await message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
         return

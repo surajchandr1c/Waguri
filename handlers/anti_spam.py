@@ -30,6 +30,7 @@ from database import (
     log_moderation_event,
     record_restriction,
     save_active_incident,
+    run_db,
 )
 from handlers.admin_check import check_bot_permissions, is_sender_admin_or_owner
 from handlers.admin_commands import NO_SEND_PERMISSIONS
@@ -57,6 +58,10 @@ def reset_anti_spam_state() -> None:
 def get_user_lock(chat_id: int, user_id: int) -> asyncio.Lock:
     """Retrieve or create an asyncio.Lock for a specific user in a group."""
     key = (chat_id, user_id)
+    if len(_user_locks) >= 5000:
+        unlocked = [k for k, lock in _user_locks.items() if not lock.locked()]
+        for k in unlocked[:1000]:
+            _user_locks.pop(k, None)
     if key not in _user_locks:
         _user_locks[key] = asyncio.Lock()
     return _user_locks[key]
@@ -87,6 +92,11 @@ def check_flood_rate(
     """
     now = time.time()
     key = (chat_id, user_id)
+    if len(_flood_tracker) >= 5000:
+        cutoff = now - max(window_seconds, 30)
+        expired = [k for k, timestamps in _flood_tracker.items() if not timestamps or timestamps[-1] < cutoff]
+        for k in expired[:1000]:
+            _flood_tracker.pop(k, None)
     timestamps = _flood_tracker.get(key, [])
     # Keep only timestamps within window_seconds
     timestamps = [t for t in timestamps if now - t <= window_seconds]
@@ -186,7 +196,7 @@ async def handle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     # Check per-group setting
-    settings = get_group_settings(chat.id)
+    settings = await run_db(get_group_settings, chat.id)
     if not settings.get("is_active", True) or not settings.get("anti_spam_enabled", True):
         return
 
@@ -224,7 +234,7 @@ async def handle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Synchronize processing per user in the group to eliminate race conditions
     async with get_user_lock(chat_id, user_id):
-        incident = get_active_incident(chat_id, user_id)
+        incident = await run_db(get_active_incident, chat_id, user_id)
 
         # Check rolling window and message fingerprint match
         if incident:
@@ -233,14 +243,14 @@ async def handle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
             if is_expired or is_different:
                 # Reset incident: either time expired or user sent a different, unrelated message
-                clear_active_incident(chat_id, user_id)
+                await run_db(clear_active_incident, chat_id, user_id)
                 incident = None
 
         if incident is None:
             # ---------------------------------------------------------
             # 1st identical message: Allow message, no warning issued
             # ---------------------------------------------------------
-            save_active_incident(
+            await run_db(save_active_incident,
                 chat_id=chat_id,
                 user_id=user_id,
                 message_fingerprint=message_fingerprint,
@@ -274,11 +284,11 @@ async def handle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if can_delete:
                 try:
                     await message.delete()
-                    increment_stat(chat_id, "spam_deleted", count=1, chat_title=chat_title)
+                    await run_db(increment_stat, chat_id, "spam_deleted", count=1, chat_title=chat_title)
                 except Exception as exc:
                     logger.error("[SPAM DELETE ERROR] Could not delete 2nd message ID %s: %s", message.message_id, exc)
 
-            save_active_incident(
+            await run_db(save_active_incident,
                 chat_id=chat_id,
                 user_id=user_id,
                 message_fingerprint=message_fingerprint,
@@ -286,11 +296,11 @@ async def handle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 last_message_time=now,
                 message_ids=recorded_msg_ids,
             )
-            log_moderation_event(chat_id, user_id, "WARNING_1", f"Message ID: {message.message_id}")
-            add_user_warning(chat_id, user_id, "Spam Warning 1/2")
+            await run_db(log_moderation_event, chat_id, user_id, "WARNING_1", f"Message ID: {message.message_id}")
+            await run_db(add_user_warning, chat_id, user_id, "Spam Warning 1/2")
 
             if warning_system_enabled:
-                increment_stat(chat_id, "warnings_issued", count=1, chat_title=chat_title)
+                await run_db(increment_stat, chat_id, "warnings_issued", count=1, chat_title=chat_title)
                 warn_text = settings.get("custom_warning_msg_1") or WARNING_MSG_1
                 try:
                     warn_msg = await context.bot.send_message(chat_id=chat_id, text=warn_text)
@@ -313,11 +323,11 @@ async def handle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if can_delete:
                 try:
                     await message.delete()
-                    increment_stat(chat_id, "spam_deleted", count=1, chat_title=chat_title)
+                    await run_db(increment_stat, chat_id, "spam_deleted", count=1, chat_title=chat_title)
                 except Exception as exc:
                     logger.error("[SPAM DELETE ERROR] Could not delete 3rd message ID %s: %s", message.message_id, exc)
 
-            save_active_incident(
+            await run_db(save_active_incident,
                 chat_id=chat_id,
                 user_id=user_id,
                 message_fingerprint=message_fingerprint,
@@ -325,11 +335,11 @@ async def handle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 last_message_time=now,
                 message_ids=recorded_msg_ids,
             )
-            log_moderation_event(chat_id, user_id, "WARNING_2", f"Message ID: {message.message_id}")
-            add_user_warning(chat_id, user_id, "Spam Warning 2/2")
+            await run_db(log_moderation_event, chat_id, user_id, "WARNING_2", f"Message ID: {message.message_id}")
+            await run_db(add_user_warning, chat_id, user_id, "Spam Warning 2/2")
 
             if warning_system_enabled:
-                increment_stat(chat_id, "warnings_issued", count=1, chat_title=chat_title)
+                await run_db(increment_stat, chat_id, "warnings_issued", count=1, chat_title=chat_title)
                 warn_text = settings.get("custom_warning_msg_2") or WARNING_MSG_2
                 try:
                     warn_msg = await context.bot.send_message(chat_id=chat_id, text=warn_text)
@@ -362,7 +372,7 @@ async def handle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             prior_msg_ids = [m for m in recorded_msg_ids if m != message.message_id]
             deleted_count, total_attempted = await delete_spam_messages_batch(chat_id, prior_msg_ids, context.bot)
             spam_deleted_this_round += deleted_count
-            increment_stat(chat_id, "spam_deleted", count=spam_deleted_this_round, chat_title=chat_title)
+            await run_db(increment_stat, chat_id, "spam_deleted", count=spam_deleted_this_round, chat_title=chat_title)
 
             # 3. Apply restriction (default 24 hours or configured duration)
             expires_at = now + restriction_duration
@@ -372,7 +382,7 @@ async def handle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 if can_restrict:
                     restricted_success = await restrict_user_24h(chat, user, context.bot, restriction_duration)
                     if restricted_success:
-                        increment_stat(chat_id, "restrictions_applied", count=1, chat_title=chat_title)
+                        await run_db(increment_stat, chat_id, "restrictions_applied", count=1, chat_title=chat_title)
                 else:
                     logger.warning(
                         "[RESTRICTION SKIPPED] Cannot restrict user %s in '%s' due to missing permission.",
@@ -387,7 +397,7 @@ async def handle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     logger.error("[RESTRICTION MSG ERROR] Could not send restriction notice in %s: %s", chat_id, exc)
 
                 # 5. Record restriction in history
-                record_restriction(
+                await run_db(record_restriction,
                     chat_id=chat_id,
                     user_id=user_id,
                     username=user.username,
@@ -397,7 +407,7 @@ async def handle_anti_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 )
 
             # Clear active incident for fresh reset
-            clear_active_incident(chat_id, user_id)
+            await run_db(clear_active_incident, chat_id, user_id)
 
             exp_str = datetime.fromtimestamp(expires_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
             logger.info(

@@ -20,7 +20,6 @@ import {
 export default function Sidebar() {
   const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
-  const [userCount, setUserCount] = useState<number | null>(null);
 
   // Close on Escape key press
   useEffect(() => {
@@ -43,27 +42,6 @@ export default function Sidebar() {
     };
   }, [isOpen]);
 
-  // Fetch user count badge
-  useEffect(() => {
-    let isMounted = true;
-    async function fetchUserCount() {
-      try {
-        const res = await fetch('/api/users');
-        if (res.ok) {
-          const data = await res.json();
-          if (isMounted && typeof data.totalUsers === 'number') {
-            setUserCount(data.totalUsers);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load user count for sidebar:', err);
-      }
-    }
-    fetchUserCount();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   const navItems = [
     {
@@ -97,7 +75,7 @@ export default function Sidebar() {
       name: 'Users & Chats',
       path: '/users',
       icon: Users,
-      badge: userCount !== null ? `${userCount}` : 'Live',
+      badge: 'Live',
       highlight: true,
     },
     {

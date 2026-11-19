@@ -17,7 +17,7 @@ from config import (
     logger,
     validate_token,
 )
-from database import init_db
+from database import close_db, init_db
 from scheduler_daemon import run_scheduler_loop
 from handlers import (
     about_command,
@@ -169,8 +169,18 @@ __all__ = [
 ]
 
 
+_scheduler_stop_event = threading.Event()
+
+
+async def shutdown_resources(application) -> None:
+    """Stop background work and release shared database resources."""
+    _scheduler_stop_event.set()
+    close_db()
+
+
 def main() -> None:
     """Initialize and run the Waguri Telegram bot."""
+    _scheduler_stop_event.clear()
     token = get_bot_token()
     logger.info("Bot token verified and loaded successfully.")
 
@@ -188,6 +198,7 @@ def main() -> None:
             read_timeout=TELEGRAM_READ_TIMEOUT,
             write_timeout=TELEGRAM_WRITE_TIMEOUT,
             pool_timeout=TELEGRAM_POOL_TIMEOUT,
+            connection_pool_size=32,
             proxy=TELEGRAM_PROXY_URL,
         )
 
@@ -197,6 +208,7 @@ def main() -> None:
             .token(token)
             .request(request)
             .post_init(setup_command_menu)
+            .post_shutdown(shutdown_resources)
             .build()
         )
 
@@ -205,6 +217,7 @@ def main() -> None:
 
         sched_thread = threading.Thread(
             target=run_scheduler_loop,
+            args=(_scheduler_stop_event,),
             name="waguri-scheduler",
             daemon=True,
         )
@@ -216,7 +229,18 @@ def main() -> None:
             timeout=TELEGRAM_GET_UPDATES_TIMEOUT,
             bootstrap_retries=TELEGRAM_BOOTSTRAP_RETRIES,
             drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
+            allowed_updates=[
+                Update.MESSAGE,
+                Update.EDITED_MESSAGE,
+                Update.CHANNEL_POST,
+                Update.EDITED_CHANNEL_POST,
+                Update.CALLBACK_QUERY,
+                Update.MY_CHAT_MEMBER,
+                Update.BUSINESS_CONNECTION,
+                Update.BUSINESS_MESSAGE,
+                Update.EDITED_BUSINESS_MESSAGE,
+                Update.DELETED_BUSINESS_MESSAGES,
+            ],
         )
     except Conflict:
         logger.error(

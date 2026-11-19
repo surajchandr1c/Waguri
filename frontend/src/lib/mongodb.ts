@@ -36,6 +36,9 @@ export function getMongoClientPromise(): Promise<MongoClient> {
       const client = new MongoClient(uri, {
         serverSelectionTimeoutMS: 10000,
         connectTimeoutMS: 10000,
+        maxPoolSize: 10,
+        minPoolSize: 0,
+        maxIdleTimeMS: 30000,
       });
       global._mongoClientPromise = client.connect();
     }
@@ -46,6 +49,9 @@ export function getMongoClientPromise(): Promise<MongoClient> {
     const client = new MongoClient(uri, {
       serverSelectionTimeoutMS: 10000,
       connectTimeoutMS: 10000,
+      maxPoolSize: 10,
+      minPoolSize: 0,
+      maxIdleTimeMS: 30000,
     });
     global._mongoClientPromise = client.connect();
   }

@@ -3,11 +3,13 @@ import logging
 import os
 import threading
 import time
+import asyncio
 from typing import Any
 from uuid import uuid4
 from pymongo import MongoClient, ASCENDING, DESCENDING, ReturnDocument
 from pymongo.errors import DuplicateKeyError
 import config
+from performance_monitor import record_latency
 
 logger = logging.getLogger("Waguri.Database")
 
@@ -44,12 +46,20 @@ def get_client() -> MongoClient:
             uri,
             serverSelectionTimeoutMS=10000,
             connectTimeoutMS=10000,
-            maxPoolSize=50,
-            minPoolSize=5,
+            maxPoolSize=20,
+            minPoolSize=1,
             maxIdleTimeMS=30000,
             waitQueueTimeoutMS=5000,
         )
     return _mongo_client
+
+
+def close_db() -> None:
+    """Close the shared PyMongo client during application shutdown."""
+    global _mongo_client
+    if _mongo_client is not None:
+        _mongo_client.close()
+        _mongo_client = None
 
 
 def get_db(db_name: str | None = None):
@@ -142,6 +152,11 @@ def init_db(db_path: str | None = None) -> None:
 
     # 19. Admins (Web Dashboard Authentication) collection
     db["admins"].create_index([("email", ASCENDING)], unique=True)
+    db["chat_abuse_warnings"].create_index([("chat_id", ASCENDING), ("user_id", ASCENDING)])
+    db["business_reply_logs"].create_index([("business_user_id", ASCENDING), ("sent_at", DESCENDING)])
+    db["scheduled_promotions"].create_index([("is_active", ASCENDING), ("next_run_at", ASCENDING)])
+    db["scheduled_stickers"].create_index([("is_active", ASCENDING), ("next_run_at", ASCENDING)])
+    db["scheduled_shayari"].create_index([("is_active", ASCENDING), ("next_run_at", ASCENDING)])
 
     logger.info("MongoDB database initialized and verified for multi-tenant operation at '%s'.", get_db_path())
 
@@ -234,6 +249,16 @@ def set_chat_active(chat_id: int, is_active: bool, db_path: str | None = None) -
 _settings_cache: dict[int, tuple[float, dict[str, Any]]] = {}
 _settings_lock = threading.Lock()
 SETTINGS_CACHE_TTL: float = 120.0  # 2 minutes TTL for group settings
+SETTINGS_CACHE_MAX_SIZE = 2000
+
+
+async def run_db(call: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run a synchronous PyMongo operation without blocking the Telegram event loop."""
+    started = time.perf_counter()
+    try:
+        return await asyncio.to_thread(call, *args, **kwargs)
+    finally:
+        record_latency("database", time.perf_counter() - started)
 
 
 def invalidate_group_settings_cache(chat_id: int | None = None) -> None:
@@ -243,6 +268,21 @@ def invalidate_group_settings_cache(chat_id: int | None = None) -> None:
             _settings_cache.clear()
         else:
             _settings_cache.pop(chat_id, None)
+
+
+def _cache_group_settings(chat_id: int, now: float, result: dict[str, Any]) -> None:
+    with _settings_lock:
+        expired = [
+            cached_id
+            for cached_id, (cached_at, _) in _settings_cache.items()
+            if now - cached_at >= SETTINGS_CACHE_TTL
+        ]
+        for cached_id in expired:
+            _settings_cache.pop(cached_id, None)
+        if len(_settings_cache) >= SETTINGS_CACHE_MAX_SIZE:
+            oldest = next(iter(_settings_cache))
+            _settings_cache.pop(oldest, None)
+        _settings_cache[chat_id] = (now, result)
 
 
 def get_group_settings(chat_id: int, db_path: str | None = None) -> dict[str, Any]:
@@ -326,8 +366,7 @@ def get_group_settings(chat_id: int, db_path: str | None = None) -> dict[str, An
             "is_active": is_active,
             "updated_at": float(s_doc.get("updated_at") or 0.0),
         }
-        with _settings_lock:
-            _settings_cache[chat_id] = (now, result)
+        _cache_group_settings(chat_id, now, result)
         return result.copy()
 
     # If document does not exist yet, register and return default config

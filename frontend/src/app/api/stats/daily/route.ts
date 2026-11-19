@@ -87,7 +87,7 @@ export async function GET(_request: Request) {
       archived_at: String(h.archived_at || ''),
     }));
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       databaseEngine: 'MongoDB Atlas Active',
       postgresConnected: false,
       today: {
@@ -104,6 +104,8 @@ export async function GET(_request: Request) {
       },
       history24h,
     });
+    response.headers.set('Cache-Control', 'private, max-age=5, stale-while-revalidate=30');
+    return response;
   } catch (error) {
     console.error('Failed to load daily moderation statistics:', error);
     return NextResponse.json(
