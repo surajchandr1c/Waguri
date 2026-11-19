@@ -409,6 +409,10 @@ class SchemaValidator:
         can_reply = 1 if cls.sanitize_bool(data.get("can_reply", True)) else 0
         account_username = cls.sanitize_string(data.get("account_username")) or None
         account_first_name = cls.sanitize_string(data.get("account_first_name")) or None
+        associated_gc_id = cls.sanitize_int(data.get("associated_gc_id")) or None
+        associated_gc_name = cls.sanitize_string(data.get("associated_gc_name")) or None
+        associated_channel_id = cls.sanitize_int(data.get("associated_channel_id")) or None
+        associated_channel_name = cls.sanitize_string(data.get("associated_channel_name")) or None
         now = time.time()
 
         return {
@@ -419,6 +423,10 @@ class SchemaValidator:
             "can_reply": can_reply,
             "account_username": account_username,
             "account_first_name": account_first_name,
+            "associated_gc_id": associated_gc_id,
+            "associated_gc_name": associated_gc_name,
+            "associated_channel_id": associated_channel_id,
+            "associated_channel_name": associated_channel_name,
             "updated_at": now,
         }
 
@@ -678,6 +686,10 @@ def create_or_save_user(data: Dict[str, Any]) -> Dict[str, Any]:
                 "can_reply": clean["can_reply"],
                 "account_username": clean["account_username"],
                 "account_first_name": clean["account_first_name"],
+                "associated_gc_id": clean["associated_gc_id"],
+                "associated_gc_name": clean["associated_gc_name"],
+                "associated_channel_id": clean["associated_channel_id"],
+                "associated_channel_name": clean["associated_channel_name"],
                 "updated_at": clean["updated_at"],
             },
             "$setOnInsert": {

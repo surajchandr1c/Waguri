@@ -52,6 +52,21 @@ export interface BotUser {
     title: string;
     type: string;
   };
+  gcName?: string;
+  gcId?: number;
+  gcType?: string;
+  channelName?: string;
+  channelId?: number;
+  associatedGC?: {
+    id: number;
+    title: string;
+    type: string;
+  };
+  associatedChannel?: {
+    id: number;
+    title: string;
+    type: string;
+  };
   stats: {
     totalInteractions: number;
     autoRepliesSent?: number;

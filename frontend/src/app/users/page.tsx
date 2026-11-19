@@ -121,8 +121,13 @@ export default function UsersPage() {
     const q = searchQuery.toLowerCase();
     return (
       u.firstName.toLowerCase().includes(q) ||
+      (u.lastName && u.lastName.toLowerCase().includes(q)) ||
       (u.username && u.username.toLowerCase().includes(q)) ||
-      u.telegramId.toString().includes(q)
+      u.telegramId.toString().includes(q) ||
+      (u.gcName && u.gcName.toLowerCase().includes(q)) ||
+      (u.gcId && u.gcId.toString().includes(q)) ||
+      (u.channelName && u.channelName.toLowerCase().includes(q)) ||
+      (u.channelId && u.channelId.toString().includes(q))
     );
   });
 
@@ -141,8 +146,8 @@ export default function UsersPage() {
   return (
     <div className="flex-1 flex flex-col bg-black">
       <Header
-        title="Bot Users & Connected Chats"
-        description="Accounts with bot on personal direct messages and group chats that added the bot."
+        title="Bot Users, Connected GCs & Channels"
+        description="Active users, group chats (GC), and broadcast channels using the bot."
       />
 
       <div className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-5">
@@ -221,9 +226,9 @@ export default function UsersPage() {
         {/* Primary Tabs */}
         <div className="flex items-center gap-2 border-b border-zinc-800 pb-3 overflow-x-auto no-scrollbar whitespace-nowrap min-w-0">
           {[
-            { id: 'users', label: `Personal Accounts (${users.length})`, icon: Users },
+            { id: 'users', label: `Users & Connected Chats (${users.length})`, icon: Users },
             { id: 'gc', label: `Group Chats (${groups.length})`, icon: MessagesSquare },
-            { id: 'channels', label: `Channels (${channels.length})`, icon: Radio },
+            { id: 'channels', label: `Broadcast Channels (${channels.length})`, icon: Radio },
           ].map((tab) => {
             const isSelected = activeTab === tab.id;
             return (
@@ -251,17 +256,17 @@ export default function UsersPage() {
           </div>
         ) : (
           <div>
-            {/* 1. USERS WHO ADDED BOT ON PERSONAL DIRECT MESSAGES */}
+            {/* 1. USERS WITH CONNECTED GC AND CHANNELS */}
             {activeTab === 'users' && (
               <div>
                 {filteredUsers.length === 0 ? (
                   <div className="p-8 text-center rounded-xl bg-zinc-900/40 border border-zinc-800 text-xs text-zinc-400">
-                    No personal DM accounts found matching your search.
+                    No bot users found matching your search.
                   </div>
                 ) : viewMode === 'grid' ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {filteredUsers.map((user) => {
-                      const initials = user.firstName ? user.firstName.slice(0, 2).toUpperCase() : 'TG';
+                      const initials = user.firstName ? user.firstName.slice(0, 2).toUpperCase() : 'US';
 
                       return (
                         <div
@@ -286,14 +291,14 @@ export default function UsersPage() {
                                 </div>
                               </div>
 
-                              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-white text-black">
-                                Personal DM Active
+                              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-white text-black shrink-0">
+                                Bot Active
                               </span>
                             </div>
 
                             {/* Telegram ID Row */}
                             <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-zinc-400">
-                              <span>Telegram ID: {user.telegramId}</span>
+                              <span>Telegram User ID: {user.telegramId}</span>
                               <div className="flex items-center gap-2">
                                 <button
                                   onClick={(e) => handleCopyId(e, user.telegramId)}
@@ -313,6 +318,41 @@ export default function UsersPage() {
                                 >
                                   <UserX className="w-3.5 h-3.5" />
                                 </button>
+                              </div>
+                            </div>
+
+                            {/* Connected GC & Channel Cards */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              {/* Group Chat (GC) Box */}
+                              <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 space-y-1">
+                                <div className="flex items-center gap-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                                  <MessagesSquare className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                  <span>Group Chat (GC)</span>
+                                </div>
+                                <div className="text-xs font-bold text-white truncate" title={user.gcName || 'Couple chatting 😉'}>
+                                  {user.gcName || 'Couple chatting 😉'}
+                                </div>
+                                {user.gcId && (
+                                  <div className="text-[10px] font-mono text-zinc-500">
+                                    Chat ID: {user.gcId}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Broadcast Channel Box */}
+                              <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 space-y-1">
+                                <div className="flex items-center gap-1.5 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                                  <Radio className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                                  <span>Channel</span>
+                                </div>
+                                <div className="text-xs font-bold text-white truncate" title={user.channelName || 'Waguri Official Announcements'}>
+                                  {user.channelName || 'Waguri Official Announcements'}
+                                </div>
+                                {user.channelId && (
+                                  <div className="text-[10px] font-mono text-zinc-500">
+                                    Channel ID: {user.channelId}
+                                  </div>
+                                )}
                               </div>
                             </div>
 
@@ -341,7 +381,7 @@ export default function UsersPage() {
                             <span className="text-[11px] text-zinc-500">Connected: {user.connectedAt}</span>
                             <div className="flex items-center gap-1 text-xs font-semibold text-white group-hover:underline">
                               <Eye className="w-3.5 h-3.5" />
-                              <span>View Feature Details</span>
+                              <span>View User & Chat Details</span>
                             </div>
                           </div>
                         </div>
@@ -354,9 +394,10 @@ export default function UsersPage() {
                     <table className="w-full text-left text-xs">
                       <thead className="bg-zinc-900 border-b border-zinc-800 text-zinc-400 font-semibold uppercase tracking-wider">
                         <tr>
-                          <th className="p-3.5">Account Name</th>
-                          <th className="p-3.5">Username</th>
-                          <th className="p-3.5">User ID</th>
+                          <th className="p-3.5">User</th>
+                          <th className="p-3.5">Username / ID</th>
+                          <th className="p-3.5">GC (Group Chat) Name</th>
+                          <th className="p-3.5">Channel Name</th>
                           <th className="p-3.5">Features In Use</th>
                           <th className="p-3.5 text-right">Action</th>
                         </tr>
@@ -368,17 +409,44 @@ export default function UsersPage() {
                             onClick={() => openUserModal(user)}
                             className="hover:bg-zinc-900/60 transition-colors cursor-pointer"
                           >
-                            <td className="p-3.5 font-bold text-white text-sm">
-                              {user.firstName} {user.lastName || ''}
+                            <td className="p-3.5">
+                              <div className="font-bold text-white text-sm">
+                                {user.firstName} {user.lastName || ''}
+                              </div>
+                              <div className="text-[11px] text-zinc-500">
+                                Connected {user.connectedAt}
+                              </div>
                             </td>
                             <td className="p-3.5 font-mono text-zinc-300">
-                              {user.username ? `@${user.username}` : '—'}
+                              <div>{user.username ? `@${user.username}` : '—'}</div>
+                              <div className="text-[11px] text-zinc-500">{user.telegramId}</div>
                             </td>
-                            <td className="p-3.5 font-mono text-zinc-400">{user.telegramId}</td>
                             <td className="p-3.5">
-                              <div className="flex flex-wrap gap-1">
+                              <div className="flex items-center gap-1.5 font-medium text-white">
+                                <MessagesSquare className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                                <span className="truncate max-w-[160px]">{user.gcName || 'Couple chatting 😉'}</span>
+                              </div>
+                              {user.gcId && (
+                                <div className="text-[10px] font-mono text-zinc-500">
+                                  ID: {user.gcId}
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-3.5">
+                              <div className="flex items-center gap-1.5 font-medium text-white">
+                                <Radio className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                                <span className="truncate max-w-[160px]">{user.channelName || 'Waguri Official Announcements'}</span>
+                              </div>
+                              {user.channelId && (
+                                <div className="text-[10px] font-mono text-zinc-500">
+                                  ID: {user.channelId}
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-3.5">
+                              <div className="flex flex-wrap gap-1 max-w-xs">
                                 {user.featuresUsed.map((f) => (
-                                  <span key={f.id} className="px-2 py-0.5 rounded text-[11px] bg-zinc-900 text-zinc-200 border border-zinc-800">
+                                  <span key={f.id} className="px-2 py-0.5 rounded text-[11px] bg-zinc-900 text-zinc-200 border border-zinc-800 whitespace-nowrap">
                                     {f.name}
                                   </span>
                                 ))}

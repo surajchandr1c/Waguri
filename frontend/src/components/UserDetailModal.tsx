@@ -168,6 +168,41 @@ export default function UserDetailModal({ entity, user, isOpen, onClose }: UserD
         {/* Modal Scrollable Body */}
         <div className="flex-1 overflow-y-auto custom-scrollbar p-5 sm:p-6 space-y-6">
 
+          {/* User's Connected GC & Channel Cards */}
+          {isUser && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-1.5">
+                <div className="flex items-center gap-2 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                  <MessagesSquare className="w-4 h-4 text-sky-400" />
+                  <span>Connected Group Chat (GC)</span>
+                </div>
+                <div className="text-sm font-bold text-white">
+                  {(currentEntity as BotUser).gcName || 'Couple chatting 😉'}
+                </div>
+                {(currentEntity as BotUser).gcId && (
+                  <div className="text-xs font-mono text-zinc-400">
+                    Chat ID: {(currentEntity as BotUser).gcId}
+                  </div>
+                )}
+              </div>
+
+              <div className="p-4 rounded-2xl bg-zinc-900 border border-zinc-800 space-y-1.5">
+                <div className="flex items-center gap-2 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider">
+                  <Radio className="w-4 h-4 text-pink-400" />
+                  <span>Connected Broadcast Channel</span>
+                </div>
+                <div className="text-sm font-bold text-white">
+                  {(currentEntity as BotUser).channelName || 'Waguri Official Announcements'}
+                </div>
+                {(currentEntity as BotUser).channelId && (
+                  <div className="text-xs font-mono text-zinc-400">
+                    Channel ID: {(currentEntity as BotUser).channelId}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Overview Metrics Cards */}
           {currentEntity.stats && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

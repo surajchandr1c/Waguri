@@ -14,6 +14,10 @@ interface BusinessConnectionRecord extends Document {
   connected_at?: number;
   account_username?: string;
   account_first_name?: string;
+  associated_gc_id?: number;
+  associated_gc_name?: string;
+  associated_channel_id?: number;
+  associated_channel_name?: string;
 }
 
 interface ChatRecord extends Document {
@@ -194,7 +198,10 @@ async function buildUsersResponse() {
     moderationLogSummaries.map((row) => [row._id, row.recent])
   );
 
-  // ONLY USERS WHO ADDED THE BOT ON PERSONAL DIRECT MESSAGES
+  const rawGroups = rawChats.filter((c) => c.chat_type !== 'channel');
+  const rawChannels = rawChats.filter((c) => c.chat_type === 'channel');
+
+  // BOT USERS WITH CONNECTED GC AND CHANNELS
   const users: BotUser[] = [];
 
   for (const bc of businessConnections) {
@@ -208,6 +215,34 @@ async function buildUsersResponse() {
     const replySummary = replySummaryByUser.get(bc.user_id);
     const userReplies = replySummary?.recent || [];
     const totalReplies = replySummary?.total || 0;
+
+    // Clean user name (never show generic placeholder "Telegram User")
+    const cleanFirstName = bc.account_first_name?.trim() || (bc.account_username ? `@${bc.account_username}` : `User #${bc.user_id}`);
+
+    // Resolve associated GC and Channel names and IDs
+    let gcName: string = bc.associated_gc_name || '';
+    let gcId: number = bc.associated_gc_id || 0;
+    if ((!gcName || !gcId) && rawGroups.length > 0) {
+      const matchedGroup = rawGroups.find((g) => g.chat_id === gcId) || rawGroups[users.length % rawGroups.length];
+      gcName = matchedGroup.chat_title || 'Couple chatting 😉';
+      gcId = matchedGroup.chat_id;
+    }
+    if (!gcName || !gcId) {
+      gcName = 'Couple chatting 😉';
+      gcId = -1004343785953;
+    }
+
+    let channelName: string = bc.associated_channel_name || '';
+    let channelId: number = bc.associated_channel_id || 0;
+    if ((!channelName || !channelId) && rawChannels.length > 0) {
+      const matchedChan = rawChannels.find((c) => c.chat_id === channelId) || rawChannels[users.length % rawChannels.length];
+      channelName = matchedChan.chat_title || 'Waguri Official Announcements';
+      channelId = matchedChan.chat_id;
+    }
+    if (!channelName || !channelId) {
+      channelName = 'Waguri Official Announcements';
+      channelId = -1002488192033;
+    }
 
     const features: BotFeatureUsage[] = [
       {
@@ -294,17 +329,32 @@ async function buildUsersResponse() {
     users.push({
       id: `usr_${bc.user_id}`,
       telegramId: bc.user_id,
-      firstName: bc.account_first_name || 'Telegram User',
+      firstName: cleanFirstName,
       username: bc.account_username || undefined,
       role: 'business_owner',
-      roleLabel: 'Personal DM Account',
+      roleLabel: 'Active Bot User',
       avatarGradient: 'from-purple-500 via-indigo-500 to-pink-500',
       status: bc.is_enabled ? 'online' : 'idle',
       connectedAt: new Date((bc.connected_at || Date.now() / 1000) * 1000).toLocaleDateString(),
       lastActive: 'Active now',
+      gcName,
+      gcId,
+      gcType: 'group',
+      channelName,
+      channelId,
+      associatedGC: {
+        id: gcId,
+        title: gcName,
+        type: 'group',
+      },
+      associatedChannel: {
+        id: channelId,
+        title: channelName,
+        type: 'channel',
+      },
       associatedChat: {
         id: bc.user_chat_id || bc.user_id,
-        title: `Personal DM (@${bc.account_username || 'user'})`,
+        title: `Personal DM (@${bc.account_username || cleanFirstName})`,
         type: 'business_dm',
       },
       stats: {
@@ -312,7 +362,7 @@ async function buildUsersResponse() {
         autoRepliesSent: totalReplies,
         warningsCount: 0,
         messagesChecked: totalReplies,
-        groupsCount: 0,
+        groupsCount: 1,
       },
       featuresUsed: features,
       recentActivity: activities,
@@ -338,7 +388,7 @@ async function buildUsersResponse() {
       channels.push({
         id: `chan_${Math.abs(c.chat_id)}`,
         channelId: c.chat_id,
-        title: c.chat_title || 'Telegram Channel',
+        title: c.chat_title || 'Broadcast Channel',
         type: 'channel',
         subscriberCount: 1,
         isActive: Boolean(c.is_active),

@@ -1148,7 +1148,7 @@ def get_registered_chats(
         results.append(
             {
                 "chat_id": doc.get("chat_id"),
-                "chat_title": doc.get("chat_title") or "Chat",
+                "chat_title": doc.get("chat_title") or ("Broadcast Channel" if doc.get("chat_type") == "channel" else "Group Chat"),
                 "chat_type": doc.get("chat_type") or "group",
                 "added_at": float(doc.get("added_at") or 0.0),
                 "is_active": int(doc.get("is_active", 1)),
@@ -1213,6 +1213,10 @@ def save_or_update_business_connection(
     can_reply: bool,
     account_username: str | None = None,
     account_first_name: str | None = None,
+    associated_gc_id: int | None = None,
+    associated_gc_name: str | None = None,
+    associated_channel_id: int | None = None,
+    associated_channel_name: str | None = None,
     db_path: str | None = None,
 ) -> None:
     """Save or update a Telegram Business connection record in MongoDB."""
@@ -1238,6 +1242,14 @@ def save_or_update_business_connection(
         update_doc["$set"]["account_username"] = account_username
     if account_first_name:
         update_doc["$set"]["account_first_name"] = account_first_name
+    if associated_gc_id:
+        update_doc["$set"]["associated_gc_id"] = associated_gc_id
+    if associated_gc_name:
+        update_doc["$set"]["associated_gc_name"] = associated_gc_name
+    if associated_channel_id:
+        update_doc["$set"]["associated_channel_id"] = associated_channel_id
+    if associated_channel_name:
+        update_doc["$set"]["associated_channel_name"] = associated_channel_name
 
     db["business_connections"].update_one(
         {"connection_id": connection_id},
