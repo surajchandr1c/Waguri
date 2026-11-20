@@ -12,7 +12,6 @@ import config
 from database import (
     get_db_path,
     get_global_bot_stats,
-    get_global_business_stats,
     get_registered_chats,
 )
 from handlers.admin_check import is_bot_owner
@@ -118,7 +117,6 @@ async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Main /owner Status View
     # -------------------------------------------------------------------------
     stats = get_global_bot_stats()
-    biz_stats = get_global_business_stats()
     uptime_str = format_uptime(time.time() - getattr(config, "BOT_START_TIME", time.time()))
     db_file = get_db_path()
     db_size_str = f" ({os.path.getsize(db_file) // 1024} KB)" if os.path.exists(db_file) else " (Cloud Atlas)"
@@ -135,11 +133,6 @@ async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"• Active Groups: <b>{stats['active_groups']}</b>\n"
         f"• Active Channels: <b>{stats['active_channels']}</b>\n"
         f"• Total Registered Chats: <b>{stats['total_registered_chats']}</b>\n\n"
-        "💼 <b>Telegram Business Auto-Reply:</b>\n"
-        f"• Connected Business Accounts: <b>{biz_stats['total_connected_users']}</b>\n"
-        f"• Active Business Connections: <b>{biz_stats['total_active_connections']}</b>\n"
-        f"• Senders Tracked: <b>{biz_stats['total_contacts_tracked']}</b>\n"
-        f"• Auto-Replies Delivered: <b>{biz_stats['total_replies_delivered']}</b>\n\n"
         "📊 <b>Global Activity Metrics:</b>\n"
         f"• Total Messages Checked: <b>{stats['total_messages']}</b>\n"
         f"• Links Deleted: <b>{stats['total_links_deleted']}</b>\n"

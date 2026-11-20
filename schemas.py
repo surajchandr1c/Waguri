@@ -622,7 +622,7 @@ def update_chat_settings_doc(chat_id: int, settings_data: Dict[str, Any]) -> Dic
         "anti_link_enabled", "anti_bio_link_enabled", "clean_service_enabled",
         "anti_spam_enabled", "flood_detection_enabled", "warning_system_enabled",
         "auto_restrict_enabled", "anti_forward_enabled", "anti_join_spam_enabled",
-        "anti_bot_enabled", "media_restrictions_enabled", "raid_mode_enabled", "greeting_enabled"
+        "anti_bot_enabled", "media_restrictions_enabled", "raid_mode_enabled"
     ]
     for bf in bool_fields:
         if bf in settings_data:
@@ -640,7 +640,7 @@ def update_chat_settings_doc(chat_id: int, settings_data: Dict[str, Any]) -> Dic
         clean_updates["flood_threshold_messages"] = SchemaValidator.sanitize_int(settings_data["flood_message_limit"])
         clean_updates["flood_message_limit"] = clean_updates["flood_threshold_messages"]
 
-    text_fields = ["custom_warning_msg_1", "custom_warning_msg_2", "custom_greeting_msg"]
+    text_fields = ["custom_warning_msg_1", "custom_warning_msg_2"]
     for tf in text_fields:
         if tf in settings_data:
             clean_updates[tf] = SchemaValidator.sanitize_string(settings_data[tf]) or None
@@ -702,14 +702,8 @@ def create_or_save_user(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def update_user_reply_settings(user_id: int, settings_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Edit personal auto-reply preferences and templates for a user in MongoDB."""
-    from database import update_personal_reply_settings, set_personal_reply_template
-    res = update_personal_reply_settings(user_id, **settings_data)
-
-    if "template" in settings_data:
-        set_personal_reply_template(user_id, settings_data["template"])
-
-    return {"success": True, "user_id": user_id, "settings": res}
+    """Stub retained for API compatibility - personal chat replay has been removed."""
+    return {"success": True, "user_id": user_id, "message": "Personal chat replay has been removed."}
 
 
 def delete_or_deactivate_user(user_id: int) -> Dict[str, Any]:

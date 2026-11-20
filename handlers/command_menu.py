@@ -19,25 +19,15 @@ DEFAULT_COMMANDS: list[BotCommand] = [
     BotCommand("contact", "Contact support (@lucky_paji)"),
 ]
 
-# Commands available to users in private chats (Personal Auto-Reply & Settings)
+# Commands available to users in private chats
 PRIVATE_COMMANDS: list[BotCommand] = [
     BotCommand("start", "Start Waguri and open dashboard"),
     BotCommand("help", "View help menu"),
-    BotCommand("personal", "Configure personal auto-reply"),
-    BotCommand("autoreply_on", "Enable personal auto-reply"),
-    BotCommand("autoreply_off", "Disable personal auto-reply"),
-    BotCommand("setmessage", "Set your personal first-reply message"),
-    BotCommand("preview", "Preview your personal auto-reply"),
-    BotCommand("mystatus", "Check auto-reply & connection status"),
-    BotCommand("resetmessage", "Reset auto-reply message to default"),
-    BotCommand("exclude_user", "Exclude sender from auto-replies"),
-    BotCommand("include_user", "Re-allow sender to receive auto-replies"),
-    BotCommand("business_stats", "View auto-reply delivery statistics"),
     BotCommand("about", "About Waguri"),
     BotCommand("contact", "Contact support (@lucky_paji)"),
 ]
 
-# Commands available to regular members in group chats (No access to GC messaging or moderation)
+# Commands available to regular members in group chats
 GROUP_MEMBER_COMMANDS: list[BotCommand] = [
     BotCommand("start", "Waguri group introduction"),
     BotCommand("help", "View bot commands"),
@@ -45,12 +35,9 @@ GROUP_MEMBER_COMMANDS: list[BotCommand] = [
     BotCommand("contact", "Contact support"),
 ]
 
-# Admin commands displayed to group administrators (Moderation & GC messaging)
+# Admin commands displayed to group administrators (Moderation & Group Management)
 ADMIN_COMMANDS: list[BotCommand] = [
     BotCommand("settings", "Interactive moderation configuration dashboard"),
-    BotCommand("setgcmsg", "Set custom GC greeting/reply message (Admin only)"),
-    BotCommand("resetgcmsg", "Reset GC greeting message to default (Admin only)"),
-    BotCommand("gcmsg", "View GC greeting message status (Admin only)"),
     BotCommand("features", "View status of all features in current group"),
     BotCommand("enable", "Enable a moderation feature"),
     BotCommand("disable", "Disable a moderation feature"),
@@ -106,16 +93,16 @@ async def setup_command_menu(application: Application) -> None:
     except Exception as exc:
         logger.error("Failed to register group member command menu: %s", exc)
 
-    # 4. Register group administrator commands
+    # 4. Register admin commands
     try:
         await bot.set_my_commands(ADMIN_COMMANDS, scope=BotCommandScopeAllChatAdministrators())
         logger.info("Group administrator command menu registered (%d commands).", len(ADMIN_COMMANDS))
     except Exception as exc:
-        logger.error("Failed to register administrator command menu: %s", exc)
+        logger.error("Failed to register admin command menu: %s", exc)
 
-    # 5. Configure Telegram chat menu button
+    # 5. Set persistent menu button
     try:
         await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
-        logger.info("Telegram chat menu button configured to open commands menu.")
+        logger.info("Chat menu button synchronized.")
     except Exception as exc:
-        logger.error("Failed to configure chat menu button: %s", exc)
+        logger.error("Failed to synchronize chat menu button: %s", exc)

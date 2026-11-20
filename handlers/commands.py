@@ -22,12 +22,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not message or not chat:
         return
 
-    # In private chat, display the rich private dashboard (or personal auto-reply if deep-linked)
+    # In private chat, display the rich private dashboard
     if chat.type == ChatType.PRIVATE:
-        if context.args and context.args[0] == "personal":
-            from handlers.personal_autoreply import personal_command
-            await personal_command(update, context)
-            return
         bot_username = context.bot.username or "Ms_Waguri_bot"
         text, markup = build_private_start_markup(bot_username)
         await message.reply_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
@@ -55,7 +51,7 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.effective_message.reply_text(
             "Waguri (@Ms_Waguri_bot) is an advanced Telegram group and channel moderation bot built with Python.\n\n"
             "Features include Abuse Detection & Auto-Moderation, automatic anti-link protection with whitelisting, repeated message spam detection, "
-            "progressive warnings, temporary restrictions, flood control, media filters, and group greetings."
+            "progressive warnings, temporary restrictions, flood control, and media filters."
         )
 
 

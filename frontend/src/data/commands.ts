@@ -1,7 +1,7 @@
 export interface BotCommandItem {
   command: string;
   syntax: string;
-  category: 'general' | 'group-management' | 'moderation' | 'personal-autoreply';
+  category: 'general' | 'group-management' | 'moderation';
   shortDesc: string;
   description: string;
   permission: 'Everyone' | 'Admin' | 'Owner' | 'Connected User' | 'Bot Owner';
@@ -31,7 +31,7 @@ export const BOT_COMMANDS: BotCommandItem[] = [
     syntax: '/help',
     category: 'general',
     shortDesc: 'View the complete commands & help reference',
-    description: 'Displays the comprehensive list of all bot commands organized into General, Group Management, Moderation & Penalties, and Personal Auto-Reply categories with placeholders and advanced features.',
+    description: 'Displays the comprehensive list of all bot commands organized into General, Group Management, and Moderation & Penalties categories.',
     permission: 'Everyone',
     example: '/help',
     previewOutput: '🤖 Waguri Bot Commands & Help\n\nGeneral Commands:\n• /start - Start Waguri\n• /help - View this help menu\n• /about - About Waguri\n• /contact - Contact support (@lucky_paji)...',
@@ -276,116 +276,6 @@ export const BOT_COMMANDS: BotCommandItem[] = [
     previewOutput: '🛡️ <b>Abuse Detection & Auto-Moderation</b>\n\n• Status: ✅ Active\n• Warnings Limit: 3\n• Mute Duration: 30 minutes\n• Bypass Shield: ✅ Enabled\n• Sexual Language: ✅ Enabled\n• General Abuse: ✅ Enabled\n• Hindi & Hinglish: ✅ Enabled',
     badge: 'Shield',
   },
-
-  // ==========================================
-  // PERSONAL AUTO-REPLY (TELEGRAM BUSINESS)
-  // ==========================================
-  {
-    command: '/personal',
-    syntax: '/personal',
-    category: 'personal-autoreply',
-    shortDesc: 'Open personal auto-reply settings dashboard',
-    description: 'Opens your interactive multi-user Personal Secretary dashboard. View connection status, toggle replies, edit custom message templates, configure cooldown, delay, and daily limits.',
-    permission: 'Connected User',
-    example: '/personal',
-    previewOutput: '💼 Personal Auto-Reply Dashboard\n\nConnected Account: Suraj (@suraj_dev)\nConnection Status: 🟢 Active\nReply Permission: ✅ Granted\n\n• Status: 🟢 ENABLED\n• Mode: 1️⃣ First-time Senders Only\n• Daily Limit: 100 replies (Sent: 12)\n• Reply Delay: 0s\n• Excluded Senders: 2',
-    badge: 'Secretary Mode',
-  },
-  {
-    command: '/autoreply_on',
-    syntax: '/autoreply_on',
-    category: 'personal-autoreply',
-    shortDesc: 'Enable personal auto-reply for your account',
-    description: 'Activates automatic secretary responses for private direct messages arriving on your connected Telegram Business account.',
-    permission: 'Connected User',
-    example: '/autoreply_on',
-    previewOutput: '🟢 Personal Auto-Reply is now ENABLED for your account.',
-  },
-  {
-    command: '/autoreply_off',
-    syntax: '/autoreply_off',
-    category: 'personal-autoreply',
-    shortDesc: 'Disable personal auto-reply for your account',
-    description: 'Silences automatic replies while keeping your business connection and settings saved for future use.',
-    permission: 'Connected User',
-    example: '/autoreply_off',
-    previewOutput: '🔴 Personal Auto-Reply is now DISABLED for your account.',
-  },
-  {
-    command: '/setmessage',
-    syntax: '/setmessage <text>',
-    category: 'personal-autoreply',
-    shortDesc: 'Set custom auto-reply message template',
-    description: 'Customizes the exact text sent to senders. Supports dynamic variables: {first_name}, {last_name}, {full_name}, {username}, {time}, {date}.',
-    permission: 'Connected User',
-    parameters: ['<text>'],
-    example: '/setmessage Hello {first_name}! Thanks for reaching out. I am currently busy and will get back to you soon.',
-    previewOutput: '✅ Auto-Reply Message Saved!\n\nYour new reply template:\n<blockquote>Hello {first_name}! Thanks for reaching out. I am currently busy and will get back to you soon.</blockquote>',
-    badge: 'Templates',
-  },
-  {
-    command: '/preview',
-    syntax: '/preview',
-    category: 'personal-autoreply',
-    shortDesc: 'Preview your rendered auto-reply template',
-    description: 'Simulates an incoming message and displays your auto-reply exactly as a recipient will see it with sample sender variables filled in.',
-    permission: 'Connected User',
-    example: '/preview',
-    previewOutput: '👁️ Auto-Reply Preview:\n\nHello Alex! Thanks for reaching out. I am currently busy and will get back to you soon.\n\nRaw Template:\nHello {first_name}! Thanks for reaching out. I am currently busy and will get back to you soon.',
-  },
-  {
-    command: '/mystatus',
-    syntax: '/mystatus',
-    category: 'personal-autoreply',
-    shortDesc: 'View personal connection & auto-reply status',
-    description: 'Shows live diagnostic report for your Telegram Business account: connection ID, rights, filter mode, senders tracked, replies sent today, and total deliveries.',
-    permission: 'Connected User',
-    example: '/mystatus',
-    previewOutput: '📊 Personal Auto-Reply Status Report:\n• Business Connection: 🟢 Connected & Active\n• Reply Rights: ✅ Granted\n• Auto-Reply: 🟢 ENABLED\n• Filter Mode: 1️⃣ First-time Senders Only\n• Unique Senders Tracked: 87\n• Replies Today: 14 / 100\n• All-Time Deliveries: 234',
-  },
-  {
-    command: '/resetmessage',
-    syntax: '/resetmessage',
-    category: 'personal-autoreply',
-    shortDesc: 'Reset reply to default Waguri template',
-    description: 'Restores your custom template back to Waguri\'s default professional business response.',
-    permission: 'Connected User',
-    example: '/resetmessage',
-    previewOutput: '🔄 Auto-Reply Message Reset\n\nYour reply template has been restored to default:\n<blockquote>Hello {first_name}! Thanks for reaching out. I am currently away and will reply shortly.</blockquote>',
-  },
-  {
-    command: '/exclude_user',
-    syntax: '/exclude_user <id|@username>',
-    category: 'personal-autoreply',
-    shortDesc: 'Exclude a specific user from receiving auto-replies',
-    description: 'Adds a sender ID or @username to your personal exclusion blacklist. Waguri will never send automated secretary replies to this person.',
-    permission: 'Connected User',
-    parameters: ['<user_id or @username>'],
-    example: '/exclude_user @annoying_bot',
-    previewOutput: '🚫 Excluded: @annoying_bot\nThis sender will no longer receive automated replies from your account.\nTotal excluded senders: 3',
-  },
-  {
-    command: '/include_user',
-    syntax: '/include_user <id|@username>',
-    category: 'personal-autoreply',
-    shortDesc: 'Re-allow an excluded user to receive auto-replies',
-    description: 'Removes an exclusion blacklist entry so the sender can receive automatic secretary replies again.',
-    permission: 'Connected User',
-    parameters: ['<user_id or @username>'],
-    example: '/include_user @annoying_bot',
-    previewOutput: '✅ Removed from exclusion: @annoying_bot\nRemaining excluded senders: 2',
-  },
-  {
-    command: '/business_stats',
-    syntax: '/business_stats',
-    category: 'personal-autoreply',
-    shortDesc: 'View secretary delivery & usage statistics',
-    description: 'Displays platform-wide aggregated delivery statistics for bot owners and personal metrics for connected users.',
-    permission: 'Connected User',
-    example: '/business_stats',
-    previewOutput: '💼 Global Business Auto-Reply Statistics:\n• Connected Users: 42\n• Active Connections: 38\n• Senders Tracked: 3,921\n• Replies Delivered: 5,410',
-    badge: 'Analytics',
-  },
 ];
 
 export const CATEGORIES = [
@@ -418,16 +308,6 @@ export const CATEGORIES = [
     description: 'Granular link whitelists, keyword blacklists, progressive warning tiers, temporary mutes, bans, and spam defenses.',
     path: '/moderation',
     count: 12,
-  },
-  {
-    id: 'personal-autoreply',
-    name: 'Personal Auto-Reply',
-    shortName: 'Secretary Mode',
-    icon: 'Briefcase',
-    emoji: '💼',
-    description: 'Multi-user Telegram Business Secretary mode. Independent settings, first-contact detection, and custom message templates.',
-    path: '/personal-autoreply',
-    count: 10,
   },
 ];
 

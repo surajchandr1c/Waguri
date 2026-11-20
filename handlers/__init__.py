@@ -65,7 +65,6 @@ from handlers.extra_protection import (
 )
 from handlers.greetings import (
     greeting_command,
-    handle_greeting_message,
     is_greeting,
     register_greeting_handlers,
 )
@@ -102,26 +101,6 @@ from handlers.abuse_handler import (
     abuse_command,
     handle_abuse_message,
     register_abuse_handlers,
-)
-from handlers.personal_autoreply import (
-    autoreply_off_command,
-    autoreply_on_command,
-    build_personal_settings_markup,
-    business_stats_command,
-    exclude_user_command,
-    handle_business_connection,
-    handle_business_message,
-    handle_deleted_business_messages,
-    handle_edited_business_message,
-    handle_private_reply_message_input,
-    include_user_command,
-    mystatus_command,
-    personal_callback_handler,
-    personal_command,
-    preview_command,
-    register_personal_autoreply_handlers,
-    resetmessage_command,
-    setmessage_command,
 )
 
 
@@ -168,11 +147,8 @@ def register_all_handlers(application: Application) -> None:
     # Group 3: Media Restrictions & Anti-Forward Filters
     register_media_protection_handlers(application)
 
-    # Group 4: User Greetings ("hii", "hlw", "hello")
+    # Group 4: User Greeting commands (/hello, /hi)
     register_greeting_handlers(application)
-
-    # Telegram Business & Personal Auto-Reply Handlers
-    register_personal_autoreply_handlers(application)
 
     # Global Error Handler
     application.add_error_handler(error_handler)
